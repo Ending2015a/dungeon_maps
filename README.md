@@ -13,9 +13,19 @@ A tiny PyTorch library for depth map manipulations.
 
 ## Demos
 
-### Orthographic projection + Map builder
+### Orthographic projection
+
+<img src="https://github.com/Ending2015a/dungeon_maps/blob/master/assets/demos_height_map.gif">
+
+[(Watch video in high resolution!)](https://youtu.be/vXpTaCOoH24)
+
+Run this example
+```shell
+python -m dungeon_maps.demos.height_map.run
+```
 
 ### Egocentric motion flow
+
 
 
 ## Installation
