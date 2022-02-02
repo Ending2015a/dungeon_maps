@@ -62,11 +62,30 @@ def create_simulator():
   )
   return env, build
 
-def render_scene(rgb, depth, occ_map, cam_pose):
+def render_scene(rgb, depth, world_map, local_map, cam_pose):
   bgr_image = rgb[...,::-1].astype(np.uint8) # (h, w, 3)
   depth_image = np.concatenate((depth,)*3, axis=-1) # (h, w, 3)
   depth_image = (depth_image*255.).astype(np.uint8)
   scene = np.concatenate((bgr_image, depth_image), axis=1)
+  # Plot occlusion map
+  cam_pos = world_map.get_camera()
+  crop_map = world_map.select(cam_pos.to(device='cuda'), 600, 600)
+  crop_occ_map = vis.draw_occlusion_map(
+    crop_map.height_map,
+    crop_map.mask
+  )
+  crop_occ_map = vis.draw_camera(crop_occ_map, crop_map.proj)
+  local_occ_map = vis.draw_occlusion_map(
+    local_map.height_map,
+    local_map.mask
+  )
+  local_occ_map = vis.draw_camera(local_occ_map, local_map.proj)
+  # Concat occlution maps
+  local_occ_map = np.pad(local_occ_map, ((0, 0), (25, 25), (0, 0)),
+      mode='constant', constant_values=0)
+  crop_occ_map = np.pad(crop_occ_map, ((0, 0), (25, 25), (0, 0)),
+      mode='constant', constant_values=0)
+  occ_map = np.concatenate((local_occ_map, crop_occ_map), axis=1)
   # padding to same size
   pad_num = np.abs(occ_map.shape[1] - scene.shape[1])
   left_pad = pad_num//2
@@ -100,7 +119,7 @@ def run_example():
     #   depth_map = torch.tensor(depth_map, device='cuda')
     # other variables will be converted to torch.Tensor automatically.
     depth_map = torch.tensor(depth_map, device='cuda')
-    topdown_map = build.step(
+    local_map = build.step(
       depth_map = depth_map,
       cam_pose = cam_pose,
       to_global = False,
@@ -114,19 +133,13 @@ def run_example():
     )
     # Merge local height map to world's height map
     build.merge(
-      topdown_map,
+      local_map,
       keep_shape = False,
       keep_pose = False,
       center_mode = dmap.CenterMode.none
     )
-    # Plotting top-down map
-    occ_map = vis.draw_occlusion_map(
-      build.world_map.height_map,
-      build.world_map.mask
-    )
-    occ_map = vis.draw_camera(occ_map, build.world_map.proj)
     # render scene
-    scene = render_scene(rgb, depth, occ_map, cam_pose)
+    scene = render_scene(rgb, depth, build.world_map, local_map, cam_pose)
     cv2.imshow('Dungeon maps', scene)
     # Taking actions via keyboard inputs
     key = cv2.waitKey(0)

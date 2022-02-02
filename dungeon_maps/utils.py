@@ -378,6 +378,220 @@ def from_4D_image(image, ndims):
   else:
     return image
 
+def generate_image_coords(
+  image_shape: torch.Size,
+  dtype: torch.dtype = None,
+  device: torch.device = None,
+):
+  """Generate image horizontal, vertical coordinates
+
+  Args:
+      image_shape (torch.Size): shape of image. Expected 2/3/4D or higher
+      dimensions, where the last two dimensions are (h, w).
+      flip_h (bool, optional): whether to flip horizontal axis. Defaults to True.
+      dtype (torch.dtype, optional): data type, defaults to torch.float32.
+          Defaults to None.
+      device (torch.device, optional): torch device. Defaults to None.
+
+  Returns:
+      torch.tensor: horizontal coordinates in `image_shape`.
+      torhc.tensor: vertical coordinates in `image_shape`.
+  """
+  dtype = dtype or torch.float32
+  ndims = len(image_shape)
+  if ndims < 2:
+    raise ValueError("rank of `image_shape` must be at east 2D, "
+      f"got {ndims}")
+  h = image_shape[-2]
+  w = image_shape[-1]
+  # Generate x, y coordinates
+  x = torch.arange(w, dtype=dtype, device=device)
+  y = torch.arange(h, dtype=dtype, device=device)
+  # Expand dims to match depth map
+  x = x.view((1,)*(ndims-2) + (1, -1)) # (..., 1, w)
+  y = y.view((1,)*(ndims-2) + (-1, 1)) # (..., h, 1)
+  x = torch.broadcast_to(x, image_shape) # (..., h, w)
+  y = torch.broadcast_to(y, image_shape)
+  return x, y
+
+def generate_crop_grid(
+  center: torch.Tensor,
+  image_width: int,
+  image_height: int,
+  crop_width: int,
+  crop_height: int,
+  device: torch.device = None
+):
+  """[summary]
+
+  Args:
+      center (torch.Tensor): (b, 2)
+      image_width (int): image width.
+      image_height (int): image height.
+      crop_width (int): width to crop.
+      crop_height (int): height to crop.
+      device (torch.device, optional): torch device. Defaults to None.
+
+  Returns:
+      torch.Tensor: crop grid (b, crop_height, crop_width, 2). torch.float32
+  """
+  center = to_tensor(center, device=device)
+  center = center.view(-1, 2).to(dtype=torch.int64)
+  batch = center.shape[0]
+  h, w = image_height, image_width
+  x, y = generate_image_coords(
+    (batch, crop_height, crop_width),
+    dtype = torch.int64,
+    device = device
+  )
+  ndims = len(x.shape)
+  center_x = (center[..., 0] - w//2).view((-1,)+(1,)*(ndims-1)) # (b, ...)
+  center_y = (center[..., 1] - h//2).view((-1,)+(1,)*(ndims-1)) # (b, ...)
+  x = (x - crop_width//2 + center_x).to(dtype=torch.float32) / (w//2)
+  y = (y - crop_height//2 + center_y).to(dtype=torch.float32) / (h//2)
+  grid = torch.stack((x, y), dim=-1)
+  return grid
+
+def crop_image(
+  image: torch.Tensor,
+  center: torch.Tensor,
+  crop_width: int,
+  crop_height: int,
+  mode: str = 'nearest',
+  padding_mode: str = 'zeros',
+  get_grid: bool = False,
+  _validate_args: bool = True
+):
+  """Crop image
+
+  Args:
+      image (torch.Tensor): 2/3/4D image (b, c, h, w).
+      center (torch.Tensor): center coordinates (b, 2). torch.int64
+      crop_width (int): width to crop.
+      crop_height (int): height to crp
+      mode (str, optional): inerpolation mode. Defaults to 'nearest'.
+      padding_mode (str, optional): padding mode. Defaults to 'zeros'.
+  
+  Returns:
+      torch.Tensor: cropped image (b, c, h, w).
+  """  
+  if _validate_args:
+    (image, center) = validate_tensors(
+      image, center, same_device = True
+    )
+    # Ensure tensor shapes
+    image = to_4D_image(image)
+    center = center.view(-1, 2)
+    # Ensure tensor dtypes
+    center = center.to(dtype=torch.int64)
+  h, w = image.shape[-2:]
+  grid = generate_crop_grid(
+    center = center,
+    image_width = w,
+    image_height = h,
+    crop_width = crop_width,
+    crop_height = crop_height,
+    device = image.device
+  )
+  orig_dtype = image.dtype
+  image = image.to(dtype=grid.dtype)
+  image = nn.functional.grid_sample(image, grid, mode=mode,
+      padding_mode=padding_mode, align_corners=False)
+  image = image.to(dtype=orig_dtype)
+  if get_grid:
+    return image, grid
+  return image
+
+def filled_crop_image(
+  image: torch.Tensor,
+  center: torch.Tensor,
+  crop_width: int,
+  crop_height: int,
+  fill_value: Any,
+  mode: str = 'nearest',
+  get_grid: bool = False,
+  _validate_args: bool = True
+):
+  """Crop image with default values. If `fill_values` is set to None, this method
+  is reduced to `crop_image`
+
+  Args:
+      image (torch.Tensor): 2/3/4D image (b, c, h, w).
+      center (torch.Tensor): center coordinates (b, 2). torch.int64
+      crop_width (int): width to crop.
+      crop_height (int): height to crp
+      fill_values (Any): values to fill in.
+      mode (str, optional): inerpolation mode. Defaults to 'nearest'.
+  
+  Returns:
+      torch.Tensor: cropped image (b, c, h, w).
+  """
+  if _validate_args:
+    (image, center) = validate_tensors(
+      image, center, same_device = True
+    )
+    # Ensure tensor shapes
+    image = to_4D_image(image)
+    center = center.view(-1, 2)
+    # Ensure tensor dtypes
+    center = center.to(dtype=torch.int64)
+  padding_mode = 'zeros'
+  if fill_value is not None:
+    pad = [1, 1, 1, 1] # pad borders
+    image = nn.functional.pad(image, pad, mode='constant', value=fill_value)
+    center = center + 1
+    padding_mode = 'border'
+  return crop_image(
+    image = image,
+    center = center,
+    crop_width = crop_width,
+    crop_height = crop_height,
+    mode = mode,
+    padding_mode = padding_mode,
+    get_grid = get_grid,
+  )
+
+def filled_crop_image_by_grid(
+  image: torch.Tensor,
+  grid: torch.Tensor,
+  fill_value: Any,
+  mode: str = 'nearest',
+  _validate_args: bool = True
+):
+  """Crop image with default values. If `fill_values` is set to None, this method
+  is reduced to `crop_image`
+
+  Args:
+      image (torch.Tensor): 2/3/4D image (b, c, h, w).
+      center (torch.Tensor): center coordinates (b, 2). torch.int64
+      crop_width (int): width to crop.
+      crop_height (int): height to crp
+      fill_value (Any): values to fill in.
+      mode (str, optional): inerpolation mode. Defaults to 'nearest'.
+  
+  Returns:
+      torch.Tensor: cropped image (b, c, h, w).
+  """
+  if _validate_args:
+    (image, grid) = validate_tensors(
+      image, grid, same_device = True
+    )
+    # Ensure tensor shapes
+    image = to_4D_image(image)
+    # Ensure tensor dtypes
+    grid = grid.to(dtype=torch.float32)
+  padding_mode = 'zeros'
+  if fill_value is not None:
+    pad = [1, 1, 1, 1] # pad borders
+    image = nn.functional.pad(image, pad, mode='constant', value=fill_value)
+    padding_mode = 'border'
+  orig_dtype = image.dtype
+  image = image.to(dtype=grid.dtype)
+  image = nn.functional.grid_sample(image, grid, mode=mode,
+      padding_mode=padding_mode, align_corners=False)
+  image = image.to(dtype=orig_dtype)
+  return image
+
 def gather_nd(
   params: torch.Tensor,
   indices: np.ndarray,

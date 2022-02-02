@@ -1,5 +1,6 @@
 # --- built in ---
 import enum
+from re import X
 from typing import Union, List
 # --- 3rd party ---
 import numpy as np
@@ -23,42 +24,6 @@ def get(*args):
       break
   return arg
 
-def generate_image_coords(
-  image_shape: torch.Size,
-  dtype: torch.dtype = None,
-  device: torch.device = None,
-):
-  """Generate image horizontal, vertical coordinates
-
-  Args:
-      image_shape (torch.Size): shape of image. Expected 2/3/4D or higher
-      dimensions, where the last two dimensions are (h, w).
-      flip_h (bool, optional): whether to flip horizontal axis. Defaults to True.
-      dtype (torch.dtype, optional): data type, defaults to torch.float32.
-          Defaults to None.
-      device (torch.device, optional): torch device. Defaults to None.
-
-  Returns:
-      torch.tensor: horizontal coordinates in `image_shape`.
-      torhc.tensor: vertical coordinates in `image_shape`.
-  """
-  dtype = dtype or torch.float32
-  ndims = len(image_shape)
-  if ndims < 2:
-    raise ValueError("rank of `image_shape` must be at east 2D, "
-      f"got {ndims}")
-  h = image_shape[-2]
-  w = image_shape[-1]
-  # Generate x, y coordinates
-  x = torch.arange(w, dtype=dtype, device=device)
-  y = torch.arange(h, dtype=dtype, device=device)
-  # Expand dims to match depth map
-  x = x.view((1,)*(ndims-2) + (1, -1)) # (..., 1, w)
-  y = y.view((1,)*(ndims-2) + (-1, 1)) # (..., h, 1)
-  x = torch.broadcast_to(x, image_shape) # (..., h, w)
-  y = torch.broadcast_to(y, image_shape)
-  return x, y
-
 def _clip_borders(
   valid_area: torch.Tensor,
   clip_border: int
@@ -75,21 +40,13 @@ def _clip_borders(
   """
   device = valid_area.device
   *batch_dims, h, w = valid_area.shape # (..., h, w)
-  batch_ndims = len(batch_dims)
-  # Compute number of pixels to clip
-  clip_size = clip_border * 2
-  clipped_shape = (*batch_dims, int(h-clip_size), int(w-clip_size))
-  clipped_area = torch.ones(clipped_shape, dtype=torch.bool, device=device)
-  # Create paddings for l/r/t/d sides
-  pad_size = [clip_border] * 4
-  padded_area = nn.functional.pad(
-    clipped_area,
-    pad_size,
-    mode='constant',
-    value=False
-  )
-  return torch.logical_and(valid_area, padded_area)
-
+  # clip h
+  valid_area[..., :clip_border, :] = False
+  valid_area[..., -clip_border:, :] = False
+  # clip w
+  valid_area[..., :clip_border] = False
+  valid_area[..., -clip_border:] = False
+  return valid_area
 
 def _safe_gather(values, indices, masks, fill_value=-np.inf):
   # values: (b, ..., N)
@@ -253,7 +210,6 @@ def orth_project(
       _validate_args = False
     )
   # Flatten point cloud
-  data_shape = point_cloud.shape[-3:-1] # (h, w)
   # (b, ..., h, w, 3) -> (b, ..., h*w, 3)
   flat_point_cloud = torch.flatten(point_cloud, -3, -2)
   # (b, ..., h, w) -> (b, ..., h*w)
@@ -460,7 +416,7 @@ def depth_map_to_point_cloud(
     depth_map = utils.to_4D_image(depth_map) # (b, c, h, w)
     # Ensure dtypes
     depth_map = depth_map.to(dtype=torch.float32)
-  x, y = generate_image_coords(
+  x, y = utils.generate_image_coords(
     depth_map.shape,
     dtype = torch.float32,
     device = depth_map.device
@@ -539,7 +495,7 @@ def height_map_to_point_cloud(
     height_map = height_map.to(dtype=torch.float32)
     width_offset = width_offset.to(dtype=torch.float32)
     height_offset = height_offset.to(dtype=torch.float32)
-  x_bin, z_bin = generate_image_coords(
+  x_bin, z_bin = utils.generate_image_coords(
     height_map.shape,
     dtype = torch.float32,
     device = height_map.device
@@ -1089,102 +1045,6 @@ def project(
     masks = torch.logical_or(canvas_masks, masks)
   return maps, masks, scattered_indices
 
-# def orth_project(
-#   coords: torch.Tensor,
-#   values: torch.Tensor,
-#   masks: torch.Tensor,
-#   map_width: int,
-#   map_height: int,
-#   fill_value: float = -np.inf,
-#   _validate_args: bool = True
-# ):
-#   """Project `values` with `points` into top-down map (orthographic plan view).
-#   The shape of `points` is (b, ..., n, 3), where `n` is the number of points.
-#   `...` is the arbitrary batch dimensions. The resulting shape is (b, ..., mh, mw),
-#   where `mh`, `mw` are `map_height` and `map_width`, respectively.
-
-#   Args:
-#       points (torch.Tensor): flattened points, shape (b, ..., n, 3). torch.float32.
-#       values (torch.Tensor): flattened values for each point. shape (b, ..., n).
-#           torch.float32.
-#       masks (torch.Tensor): flattened mask for each point, True for valid points.
-#           shape (b, ..., n). torch.float32.
-#       width_offset (torch.Tensor): batch pixel offset along map width (b,).
-#           torch.float32
-#       height_offset (torch.Tensor): batch pixel offset along map height (b,).
-#           torch.float32
-#       map_res (float): map resolution, unit per cell.
-#       map_width (int): map width, pixel.
-#       map_height (int): map height, pixel.
-#       fill_value (float, optional): default values to fill in the top-down map.
-#           Defaults to -np.inf.
-#       flip_h (bool, optional): whether to flip the horizontal axis. Note that
-#           in OpenCV format, the origin (0, 0) of an image is at the upper left
-#           corner, which should be flipped after converting to image space.
-#           Defaults to True.
-  
-#   Returns:
-#       torch.Tensor: top-down map in shape (b, ..., mh, mw)
-#       torch.Tensor: masks in shape (b, ..., mh, mw), False if the value is invalid,
-#           True otherwise.
-#   """
-#   if _validate_args:
-#     # Convert to tensors and ensure they are on the same device
-#     (coords, values, masks) = utils.validate_tensors(
-#       coords, values, masks, same_device = True
-#     )
-#     # Ensure tensor shapes
-#     orig_ndims = len(coords.shape)
-#     if orig_ndims < 3:
-#       coords = coords.view(1, -1, 2) # at least 3 dims (b, n, 2)
-#     batch_shapes = (values.shape, masks.shape, coords.shape[:-1])
-#     batch = torch.broadcast_shapes(*batch_shapes)
-#     coords = torch.broadcast_to(coords, batch+(2,)) # (b, ..., n, 2)
-#     values = torch.broadcast_to(values, batch) # (b, ..., n)
-#     masks = torch.broadcast_to(masks, batch) # (b, ..., n)
-#     # Ensure dtypes
-#     coords = coords.to(dtype=torch.int64)
-#     values = values.to(dtype=torch.float32)
-#     masks = masks.to(dtype=torch.bool)
-#   device = coords.device
-#   batch_dims = coords.shape[:-2] # (b, ...)
-#   # (z, x) coordinates on 2D top-down view
-#   indices = coords
-#   # index bounds [0, 0] ~ [map_height, map_width]
-#   low_bound = 0
-#   up_bound = torch.tensor(
-#     (map_height, map_width), dtype=torch.int64, device=device
-#   )
-#   # Filtering invalid area (b, ..., n)
-#   valid_area = torch.cat((
-#     indices >= low_bound, indices < up_bound,
-#     masks.unsqueeze(dim=-1)
-#   ), dim=-1).all(dim=-1)
-  
-#   # Create canvas (b, ..., mh, mw)
-#   canvas_dims = (*batch_dims, map_height, map_width)
-#   canvas = torch.zeros(canvas_dims, device=device)
-#   # Perform orthogonal projection
-#   # canvas: (b, ..., mh, mw)
-#   # indices: (b, ..., n, 2)
-#   # values: (b, ..., n)
-#   # valid_area: (b, ..., n)
-#   # Ensure dtypes
-#   canvas = canvas.to(dtype=torch.float32)
-#   indices = indices.to(dtype=torch.int64)
-#   values = values.to(dtype=torch.float32)
-#   valid_area = valid_area.to(dtype=torch.bool)
-#   topdown_map, scattered_indices = utils.scatter_max(
-#     canvas = canvas,
-#     indices = indices,
-#     values = values,
-#     masks = valid_area,
-#     fill_value = fill_value,
-#     _validate_args = False
-#   ) # (b, ..., mh, mw)
-#   masks = ~(scattered_indices == -1) # (b, ..., mh, mw)
-#   return topdown_map, masks, scattered_indices
-
 def compute_center_offsets(
   cam_pose: torch.Tensor,
   width_offset: torch.Tensor,
@@ -1193,7 +1053,6 @@ def compute_center_offsets(
   map_width: float,
   map_height: int,
   to_global: bool,
-  flip_h: bool = True,
   center_mode: CenterMode = CenterMode.none,
   _validate_args: bool = True
 ):
@@ -1210,13 +1069,8 @@ def compute_center_offsets(
       map_width (int): map width, pixel.
       map_height (int): map height, pixel.
       to_global (bool): convert to global space according to `cam_pose`.
-      flip_h (bool, optional): whether to flip the horizontal axis. Note that in
-          OpenCV format, the origin (0, 0) of an image is at the upper left corner,
-          which should be flipped before converting to point cloud. Defaults
-          to True.
       center_mode (CenterMode, optional): centering mode. Defaults to
           CenterMode.none.
-      _validate_args (bool, optional): [description]. Defaults to True.
 
   Returns:
       torch.Tensor: pixel offsets along map width
@@ -1350,27 +1204,43 @@ class MapProjector():
 
   def clone(
     self,
-    **kwargs
+    width: int = None,
+    height: int = None,
+    hfov: float = None,
+    vfov: float = None,
+    cam_pose: tuple = None,
+    width_offset: float = None,
+    height_offset: float = None,
+    cam_pitch: float = None,
+    cam_height: float = None,
+    map_res: float = None,
+    map_width: int = None,
+    map_height: int = None,
+    trunc_depth_min: float = None,
+    trunc_depth_max: float = None,
+    clip_border: int = None,
+    to_global: bool = None,
+    flip_h: bool = None
   ):
     """Clone MapProjector, override arguments with `kwargs`"""
     return MapProjector(
-      width = get(kwargs.get('width'), self.width),
-      height = get(kwargs.get('height'), self.height),
-      hfov = get(kwargs.get('hfov'), self.hfov),
-      vfov = get(kwargs.get('vfov'), self.vfov),
-      cam_pose = get(kwargs.get('cam_pose'), self.cam_pose),
-      width_offset = get(kwargs.get('width_offset'), self.width_offset),
-      height_offset = get(kwargs.get('height_offset'), self.height_offset),
-      cam_pitch = get(kwargs.get('cam_pitch'), self.cam_pitch),
-      cam_height = get(kwargs.get('cam_height'), self.cam_height),
-      map_res = get(kwargs.get('map_res'), self.map_res),
-      map_width = get(kwargs.get('map_width'), self.map_width),
-      map_height = get(kwargs.get('map_height'), self.map_height),
-      trunc_depth_min = get(kwargs.get('trunc_depth_min'), self.trunc_depth_min),
-      trunc_depth_max = get(kwargs.get('trunc_depth_max'), self.trunc_depth_max),
-      clip_border = get(kwargs.get('clip_border'), self.clip_border),
-      to_global = get(kwargs.get('to_global'), self.to_global),
-      flip_h = get(kwargs.get('flip_h'), self.flip_h),
+      width = get(width, self.width),
+      height = get(height, self.height),
+      hfov = get(hfov, self.hfov),
+      vfov = get(vfov, self.vfov),
+      cam_pose = get(cam_pose, self.cam_pose),
+      width_offset = get(width_offset, self.width_offset),
+      height_offset = get(height_offset, self.height_offset),
+      cam_pitch = get(cam_pitch, self.cam_pitch),
+      cam_height = get(cam_height, self.cam_height),
+      map_res = get(map_res, self.map_res),
+      map_width = get(map_width, self.map_width),
+      map_height = get(map_height, self.map_height),
+      trunc_depth_min = get(trunc_depth_min, self.trunc_depth_min),
+      trunc_depth_max = get(trunc_depth_max, self.trunc_depth_max),
+      clip_border = get(clip_border, self.clip_border),
+      to_global = get(to_global, self.to_global),
+      flip_h = get(flip_h, self.flip_h),
     )
 
   def orth_project(
@@ -1662,7 +1532,6 @@ class MapProjector():
     map_width: int = None,
     map_height: int = None,
     to_global: bool = None,
-    flip_h: bool = None,
     center_mode: CenterMode = CenterMode.none,
     _validate_args: bool = True
   ):
@@ -1674,7 +1543,6 @@ class MapProjector():
       map_width = get(map_width, self.map_width),
       map_height = get(map_height, self.map_height),
       to_global = get(to_global, self.to_global),
-      flip_h = get(flip_h, self.flip_h),
       center_mode = center_mode,
       _validate_args = _validate_args
     )
@@ -1710,7 +1578,7 @@ class TopdownMap():
       else:
         is_height_map = False
     self._is_height_map = is_height_map
-  
+
   @property
   def is_empty(self):
     return self.topdown_map is None
@@ -1744,6 +1612,54 @@ class TopdownMap():
   def proj(self):
     """Return map projector of this map"""
     return self._proj
+
+  def get_camera(
+    self,
+  ):
+    # get camera coordinates
+    cam_pos = np.asarray([0., 0., 0.])
+    if self.proj.to_global:
+      cam_pos = self.proj.local_to_global_space(
+        points = cam_pos
+      )
+    cam_pos_x, cam_pos_z = self.proj.map_quantize(
+      x_coords = cam_pos[..., 0],
+      z_coords = cam_pos[..., 2],
+    )
+    cam_pos = torch.stack((cam_pos_x, cam_pos_z), dim=-1) # (b, 1, 2)
+    return cam_pos.squeeze(dim=-2)
+
+  def select(
+    self,
+    center: torch.Tensor,
+    crop_width: int,
+    crop_height: int,
+    fill_value: float = None,
+    mode: str = 'nearest',
+  ):
+    """Select region
+
+    Args:
+        center (torch.Tensor): center coordinates of the region. (b, 2).
+            torch.int64
+        crop_width (int): width to crop.
+        crop_height (int): height to crop.
+        fill_value (float, optional): default values to fill in. Defaults to None.
+        mode (str, optional): interpolation mode. Defaults to 'nearest'.
+    
+    Returns:
+      TopdownMap: cropped top-down map.
+    """
+    return crop_topdown_map(
+      self,
+      center = center,
+      crop_width = crop_width,
+      crop_height = crop_height,
+      fill_value = fill_value,
+      mode = mode,
+      _validate_args = True
+    )
+
 
 def _flattened_topdown_map(
   source: TopdownMap
@@ -1891,8 +1807,8 @@ def _compute_new_shape_and_offsets(
     )
     # Compute width, height
     padding = 2
-    map_width = (max_x - min_x) + padding
-    map_height = (max_z - min_z) + padding
+    map_width = ((max_x - min_x) + padding).item()
+    map_height = ((max_z - min_z) + padding).item()
     # Compute offsets
     center_pos_x = (max_x + min_x) / 2.
     center_pos_z = (max_z + min_z) / 2.
@@ -1993,6 +1909,79 @@ def fuse_topdown_maps(
     is_height_map = is_height_map
   )
   return topdown_map
+
+def crop_topdown_map(
+  source: TopdownMap,
+  center: torch.Tensor,
+  crop_width: int,
+  crop_height: int,
+  fill_value: float = None,
+  mode: str = 'nearest',
+  _validate_args: bool = True
+):
+  """Crop topdown map
+
+  Args:
+      source (TopdownMap): [description]
+      center (torch.Tensor): [description]
+      crop_width (int): [description]
+      crop_height (int): [description]
+      fill_value (float, optional): [description]. Defaults to None.
+      mode (str, optional): [description]. Defaults to 'nearest'.
+
+  Returns:
+      TopdownMap: cropped top-down map.
+  """
+  proj = source.proj
+  # Convert center to image coordinates
+  if _validate_args:
+    (center, width_offset, height_offset) = utils.validate_tensors(
+      center, proj.width_offset, proj.height_offset,
+      same_device = True
+    )
+    center = utils.to_tensor(center).view(-1, 2)
+  height_map, grid = utils.filled_crop_image(
+    source.height_map,
+    center = center,
+    crop_width = crop_width,
+    crop_height = crop_height,
+    fill_value = -np.inf,
+    mode = mode,
+    _validate_args = _validate_args,
+    get_grid = True
+  )
+  mask = utils.filled_crop_image_by_grid(
+    source.mask,
+    grid = grid,
+    fill_value = False,
+    mode = mode,
+    _validate_args = _validate_args
+  )
+  topdown_map = height_map
+  if not source.is_height_map:
+    topdown_map = utils.filled_crop_image_by_grid(
+      source.topdown_map,
+      grid = grid,
+      fill_value = fill_value,
+      mode = mode,
+      _validate_args = _validate_args
+    )
+  width_offset = width_offset + crop_width/2 - center[..., 0]
+  height_offset = (height_offset + crop_height/2
+      - ((proj.map_height-1) - center[..., 1])) # flip
+  map_projector = proj.clone(
+    width_offset = width_offset,
+    height_offset = height_offset,
+    map_width = crop_width,
+    map_height = crop_height,
+  )
+  return TopdownMap(
+    topdown_map = topdown_map,
+    mask = mask,
+    height_map = height_map,
+    is_height_map = source.is_height_map,
+    map_projector = map_projector
+  )
 
 class MapBuilder():
   def __init__(
@@ -2214,7 +2203,6 @@ class MapBuilder():
     map_width: int = None,
     map_height: int = None,
     to_global: bool = None,
-    flip_h: bool = None,
     center_mode: CenterMode = None,
     **kwargs_
   ):
@@ -2226,7 +2214,6 @@ class MapBuilder():
       map_width = map_width,
       map_height = map_height,
       to_global = to_global,
-      flip_h = flip_h,
       center_mode = center_mode
     )
     # Returns: torch.Tensor, torch.Tensor
