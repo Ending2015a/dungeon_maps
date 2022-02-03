@@ -1,7 +1,7 @@
 # Dungeon Maps
 A tiny PyTorch library for depth map manipulations.
 
-Version: 0.0.1a0
+Version: `0.0.1a0`
 
 ## Features
 
@@ -38,7 +38,7 @@ Control: `W`, `A`, `S`, `D`. `Q` for exit
 
 ### Egocentric motion flow
 
-<img src="">
+<img src="https://github.com/Ending2015a/dungeon_maps/blob/master/assets/demos_ego_flow.gif">
 
 [(Watch this video in high quality)](https://youtu.be/q6HnNAVr2ps)
 
@@ -64,4 +64,9 @@ pip install dungeon_maps
 Install from GitHub repo
 ```shell
 pip install git+https://github.com.Ending2015a/dungeon_map.git@master
+```
+
+Install demos
+```shell
+pip install dungeon_maps[sim]
 ```
