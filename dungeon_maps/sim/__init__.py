@@ -21,10 +21,13 @@ RESOURCE_ROOT = os.path.join(SIM_ROOT, 'data')
 
 # --- my module ---
 from .dungeon import Dungeon
+from .forest import Forest
 
 def make(sim_name, **kwargs):
   if sim_name.lower() == 'dungeon':
     return Dungeon(**kwargs)
+  elif sim_name.lower() == 'forest':
+    return Forest(**kwargs)
   else:
     raise NotImplementedError(
       f"Unknown sim_name received: {sim_name}"

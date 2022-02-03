@@ -261,8 +261,3 @@ class Dungeon():
     self.cur_steps += 1
     self.update_player_states()
     return self._get_observations()
-
-def make(env_id: str, **kwargs):
-  if env_id == 'dungeon':
-    return Dungeon(**kwargs)
-  raise NotImplementedError(f"Unknown env_id: {env_id}")

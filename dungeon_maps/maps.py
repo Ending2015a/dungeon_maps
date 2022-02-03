@@ -268,7 +268,7 @@ def orth_project(
     return topdown_map, masks, height_map
   return topdown_map, masks
 
-def camera_space_affine_grid(
+def camera_affine_grid(
   depth_map: torch.Tensor,
   trans_pose: torch.Tensor,
   cam_pitch: torch.Tensor,
@@ -322,7 +322,7 @@ def camera_space_affine_grid(
     cam_pitch = cam_pitch.to(dtype=torch.float32)
     cam_height = cam_height.to(dtype=torch.float32)
   # Convert depth map to point cloud
-  point_cloud, valid_area = depth_map_to_point_cloud(
+  point_cloud, _ = depth_map_to_point_cloud(
     depth_map = depth_map,
     focal_x = focal_x,
     focal_y = focal_y,
@@ -1291,7 +1291,7 @@ class MapProjector():
       _validate_args = _validate_args
     )
 
-  def camera_space_affine_grid(
+  def camera_affine_grid(
     self,
     depth_map: torch.Tensor,
     trans_pose: torch.Tensor,
@@ -1304,7 +1304,7 @@ class MapProjector():
     flip_h: bool = None,
     _validate_args: bool = True
   ):
-    return camera_space_affine_grid(
+    return camera_affine_grid(
       depth_map = depth_map,
       trans_pose = trans_pose,
       cam_pitch = get(cam_pitch, self.cam_pitch),

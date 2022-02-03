@@ -1,6 +1,8 @@
 # Dungeon Maps
 A tiny PyTorch library for depth map manipulations.
 
+Version: 0.0.1a0
+
 ## Features
 
 | | Batching | Multi-channels | GPU acceleration |
@@ -15,18 +17,37 @@ A tiny PyTorch library for depth map manipulations.
 
 ### Orthographic projection
 
+
 <img src="https://github.com/Ending2015a/dungeon_maps/blob/master/assets/demos_height_map.gif">
 
-[(Watch video in high resolution!)](https://youtu.be/vXpTaCOoH24)
+[(Watch this video in high quality)](https://youtu.be/vXpTaCOoH24)
+
+
+Projecting top-down maps (plan view) from depth maps.
+* Top left: RGB
+* Top right: Depth map
+* Bottom left: top-down maps in local space
+* Bottom right: top-down maps in global space
+
 
 Run this example
 ```shell
 python -m dungeon_maps.demos.height_map.run
 ```
+Control: `W`, `A`, `S`, `D`. `Q` for exit
 
 ### Egocentric motion flow
 
+<img src="">
 
+[(Watch this video in high quality)](https://youtu.be/q6HnNAVr2ps)
+
+Calculating the flow fields caused by camera motion.
+
+Run this example
+```shell
+python -m dungeon_maps.demos.ego_flow.run
+```
 
 ## Installation
 

@@ -11,8 +11,6 @@ import dungeon_maps as dmap
 import dungeon_maps.sim
 from dungeon_maps.demos.height_map import vis
 
-# convert hex color code to bgr uint8 color code
-hex2bgr = lambda hex: [int(hex[i:i+2], 16) for i in (0,2,4)][::-1]
 # Some constants
 WIDTH, HEIGHT = 800, 600 # pixel
 HFOV = math.radians(70)
