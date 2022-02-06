@@ -9,7 +9,7 @@ from torch import nn
 # --- my module ---
 from dungeon_maps import utils
 
-# ======= Util functions =======
+# ======= Utility functions =======
 
 @enum.unique
 class CenterMode(str, enum.Enum):
@@ -18,40 +18,64 @@ class CenterMode(str, enum.Enum):
   camera = "camera"
 
 def get(*args):
-  """Return the first non-None argment"""
+  """Return the first non-None argument"""
   for arg in args:
     if arg is not None:
       break
   return arg
 
-def _clip_borders(
-  valid_area: torch.Tensor,
+def _mask_borders(
+  masks: torch.Tensor,
   clip_border: int
 ):
-  """Clip depth map left/right/top/down borders
-  by setting the corresponding `valid_area` to False
+  """Masking left/right/top/down borders by setting `masks` to False
 
   Args:
-      valid_area (torch.Tensor): mask in shape (..., h, w). torch.bool
-      clip_border (int): number of border pixels to clip.
+      masks (torch.Tensor): mask in shape (..., h, w). torch.bool
+      clip_border (int): number of border pixels to mask.
 
   Returns:
-      torch.Tensor: clipped valid area in shape (..., h, w). torch.bool
+      torch.Tensor: new mask in shape (..., h, w). torch.bool
   """
-  device = valid_area.device
-  *batch_dims, h, w = valid_area.shape # (..., h, w)
+  assert torch.is_tensor(masks), \
+    f"`masks` should be a torch.Tensor, got {type(masks)}"
+  assert len(masks.shape) >= 2, "rank of `masks` should be greater than 2"
+  device = masks.device
+  *batch_dims, h, w = masks.shape # (..., h, w)
   # clip h
-  valid_area[..., :clip_border, :] = False
-  valid_area[..., -clip_border:, :] = False
+  masks[..., :clip_border, :] = False
+  masks[..., -clip_border:, :] = False
   # clip w
-  valid_area[..., :clip_border] = False
-  valid_area[..., -clip_border:] = False
-  return valid_area
+  masks[..., :clip_border] = False
+  masks[..., -clip_border:] = False
+  return masks
 
-def _safe_gather(values, indices, masks, fill_value=-np.inf):
-  # values: (b, ..., N)
-  # indices: (b, ..., M)
-  # masks: (b, ..., M)
+def _masked_gather(values, indices, masks, fill_value=-np.inf):
+  """Gather `values` with masked indices for some indices may be invalid
+  indices, e.g. -1. Those elements are filled with `fill_value`.
+
+  For example:
+  ```
+  values = [0.1, 0.2, 0.3]
+  indices = [-1, 0, 1, 2]
+  masks = [False, True, True, False]
+  fill_value = -np.inf
+  ```
+  Then the return values of this method can be
+  ```
+  [-np.inf, 0.1, 0.2, -np.inf]
+  ```
+  since -1 and 2 in `indices` are masked.
+
+  Args:
+      values (torch.Tensor): value tensor. (b, ..., N)
+      indices (torch.Tensor): indices of elements to gather. (b, ..., M)
+      masks (torch.Tensor): masks (b, ..., M).
+      fill_value (float, optional): default values to fill in. Defaults to -np.inf.
+
+  Returns:
+      torch.Tensor: value tensor (b, ..., M).
+  """
   # broadcast shapes
   (values, indices, masks) = utils.validate_tensors(
     values, indices, masks, same_device=True
@@ -69,7 +93,11 @@ def _safe_gather(values, indices, masks, fill_value=-np.inf):
   values = torch.cat((dummy_channel, values), dim=-1)
   return torch.gather(values, dim=-1, index=indices)
 
-# ======== Raw APIs ========
+# ======== Raw functional APIs =======
+# We don't encourage you to call these APIs directly
+# because you have to assign many arguments every time
+# you call these APIs. Instead, you can use MapProjector
+# to set the default arguments.
 
 def orth_project(
   depth_map: torch.Tensor,
@@ -94,23 +122,28 @@ def orth_project(
   get_height_map: bool = False,
   _validate_args: bool = True
 ):
-  """Project batch unnormalized depth maps to top-down maps (orthographic
-  projection)
+  """Project batch UNNORMALIZED depth maps to top-down maps or project
+  value maps to top-down "value" maps (orthographic projection).
+
+  The rank of `depth_map` must be at least 4D (b, c, h, w). If not, it is
+  interpreted as (h, w), (c, h, w), (b, c, h, w) and (b, ..., h, w) for higher
+  ranks.
+
+  The `value_map` should have the same `h` and `w` dimensions as `depth_map`, but
+  not for `c` dimension (channel), as it is the depth of vector values for each
+  pixel. For example, `value_map` can be a semantic segmentation in one-hot
+  categorical format. Note that each channel is projected separatly, which means
+  each channel is independent. The values should be comparable by `max` operator.
+
+  If `value_map` is None, the y-axis of the depth maps are used to project the
+  height maps.
 
   Args:
       depth_map (torch.Tensor): UNNORMALIZED depth map, which means the range of
-          values is [min_depth, max_depth]. The rank must be at least 4D
-          (b, c, h, w). If not, it is converted automatically as the following
-              2D: (h, w)
-              3D: (c, h, w)
-              4D: (b, c, h, w)
-              nD: (b, ..., h, w) for n > 4.
-          torch.float32.
-      value_map (torch.Tensor): value map to project. It should be in the same shape
-          as `depth_map` except for `c` dimension, the depth of vector
-          values for each pixel. If this is set to None, the height map generated
-          from `depth_map` is used. Note that the values must be comparable with `max`
-          operator. torch.float32.
+          values is [min_depth, max_depth]. torch.float32. The rank must be at
+          least 4D (b, c, h, w). If not, it is converted automatically.
+      value_map (torch.Tensor): value map to project. If this is set to None,
+          the height map generated from `depth_map` is used. torch.float32.
       cam_pose (torch.Tensor): camera pose [x, z, yaw] with shape (b, 3), yaw in
           rad. torch.float32
       width_offset (torch.Tensor): batch pixel offset along map width (b,).
@@ -191,8 +224,8 @@ def orth_project(
   )  # (b, ..., h, w, 3)
   # Truncate border pixels of depth maps
   if (clip_border is not None) and (clip_border > 0):
-    valid_area = _clip_borders(
-      valid_area = valid_area,
+    valid_area = _mask_borders(
+      masks = valid_area,
       clip_border = clip_border
     )
   # Transform space from camera space to local space
@@ -251,7 +284,7 @@ def orth_project(
     # Projeciting height map
     flat_indices = torch.flatten(indices, -2, -1)
     flat_masks = torch.flatten(masks, -2, -1)
-    flat_height_map = _safe_gather(
+    flat_height_map = _masked_gather(
       values = flat_point_cloud[..., 1],
       indices = flat_indices,
       masks = flat_masks,
@@ -379,21 +412,17 @@ def depth_map_to_point_cloud(
   flip_h: bool = True,
   _validate_args: bool = True
 ):
-  """Generate point cloud from the given `depth_map` and transform it to
-  camera space.
-      X: right
-      Y: up
-      Z: forward (depth)
+  """Generate point clouds from `depth_map`. The generated point clouds are
+  in the camera space. X: camera right, Y: camera up, Z: forward (depth).
+
+  The rank of `depth_map` must be at least 4D (b, c, h, w). If not, it is
+  interpreted as (h, w), (c, h, w), (b, c, h, w) and (b, ..., h, w) for higher
+  ranks.
 
   Args:
       depth_map (torch.Tensor): UNNORMALIZED depth map, which means the range of
-          values is [min_depth, max_depth]. The rank must be at least 4D
-          (b, c, h, w). If not, it is converted automatically as the following
-              2D: (h, w)
-              3D: (c, h, w)
-              4D: (b, c, h, w)
-              nD: (b, ..., h, w) for n > 4.
-          torch.float32.
+          values is [min_depth, max_depth]. torch.float32. The rank must be at
+          least 4D (b, c, h, w). If not, it is converted automatically.
       focal_x (float): focal length on x direction.
       focal_y (float): focal length on y direction.
       center_x (float): center coordinate of depth map.
@@ -451,21 +480,15 @@ def height_map_to_point_cloud(
   flip_h: bool = True,
   _validate_args: bool = True
 ):
-  """Generate point cloud from the given `height_map` and transform it
-  to viewing space.
-      X: right
-      Y: up (height)
-      Z: forward
+  """Generate point cloud from `height_map`.
+
+  The rank of `height_map` must be at least 4D (b, c, h, w). If not, it is
+  interpreted as (h, w), (c, h, w), (b, c, h, w) and (b, ..., h, w) for higher
+  ranks.
 
   Args:
-      height_map (torch.Tensor): UNNORMALIZED height map. The rank must be at
-          least 4D (b, c, h, w). If not , it is converted automatically
-          as the following
-              2D: (h, w)
-              3D: (c, h, w)
-              4D: (b, c, h, w)
-              nD: (b, ..., h, w) for n > 4.
-          torch.float32.
+      height_map (torch.Tensor): UNNORMALIZED height map. torch.float32. The rank
+          must be at least 4D (b, c, h, w). If not, it is converted automatically.
       width_offset (torch.Tensor): batch pixel offset along map width (b,).
           torch.float32
       height_offset (torch.Tensor): batch pixel offset along map height (b,).
@@ -513,7 +536,7 @@ def height_map_to_point_cloud(
   y = height_map
   return torch.stack((x, y, z), dim=-1)
 
-# ===== Space transform =====
+# ====== Space transform APIs =====
 
 def image_to_camera_space(
   points: torch.Tensor,
@@ -973,10 +996,12 @@ def project(
   fill_value: float = -np.inf,
   _validate_args: bool = True
 ):
-  """Project `values` onto `canvas` to the specified `coords`.
-  The shape of `coords` is (b, ..., n, 2) stores the coordinates of `canvas`'s
-  last two dimensions, where `n` is the number of points. `...` is the arbitrary
-  batch dimensions. The `canvas` shape is (b, ..., mh, mw).
+  """Project `values` onto `canvas` with the specified `coords`.
+
+  The shape of `coords` is (b, ..., n, 2), which stores the coordinates of
+  `canvas`'s last two dimensions, usually are `h` and `w`, where `n` is the number
+  of points. `...` is the arbitrary batch dimensions. The shape of `canvas` is
+  (b, ..., mh, mw).
 
   Args:
       coords (torch.Tensor): flattened coordinates, shape (b, ..., n, 2).
@@ -1120,7 +1145,7 @@ def compute_center_offsets(
   height_offset = height_offset + h_offset
   return width_offset, height_offset
 
-# ========= Main API =========
+# ========= Functional APIs =========
 
 class MapProjector():
   def __init__(
@@ -1143,10 +1168,11 @@ class MapProjector():
     to_global: bool = False,
     flip_h: bool = True
   ):
-    """Projector
-    This helper class provides a simple interface to access the methods defined
-    above. Some common arguments, e.g. camera intrinsics, are computed and stored
-    as the default arguments on calling those methods.
+    """Map Projector
+    This helper class provides a simple interface to access the raw functional APIs
+    defined above. Some common arguments, e.g. camera intrinsics, are computed and
+    stored as the default arguments, so that one can ignore those arguments when
+    calling those APIs.
 
     Args:
         width (int): width of depth map. (pixel)
@@ -1156,8 +1182,10 @@ class MapProjector():
             This argument usually can be ignored since `hfov`=`vfov`.
             Defaults to None.
         cam_pose (tuple, optional): camera pose [x, z, yaw]. Defaults to None.
-        width_offset (float, optional): Defaults to None.
-        height_offset (float, optional): Defaults to None. TODO
+        width_offset (float, optional): offsets of image coordinates. Defaults to
+            None.
+        height_offset (float, optional): offsets of image coordinates. Defaults to
+            None.
         cam_pitch (float, optional): camera pitch (rad). Defaults to None.
         cam_height (float, optional): camera height (unit). Defaults to None.
         map_res (float, optional): topdown map resolution (unit per cell).
@@ -1222,7 +1250,15 @@ class MapProjector():
     to_global: bool = None,
     flip_h: bool = None
   ):
-    """Clone MapProjector, override arguments with `kwargs`"""
+    """Clone MapProjector and override some arguments. Note that
+    this method only do a shallow copy for each argument.
+
+    Args:
+        See MapProjector.__init__
+
+    Returns:
+        MapProjector: 
+    """
     return MapProjector(
       width = get(width, self.width),
       height = get(height, self.height),
@@ -1547,87 +1583,177 @@ class MapProjector():
       _validate_args = _validate_args
     )
 
+# ===== Object-oriented APIs =====
+
 class TopdownMap():
+  """A simple top-down map wrapper provides common top-down map
+  manipulations, e.g. crop and merge.
+  """
   def __init__(
     self,
-    topdown_map: Union[np.ndarray, torch.Tensor] = None,
-    mask: Union[np.ndarray, torch.Tensor] = None,
-    height_map: Union[np.ndarray, torch.Tensor] = None,
+    topdown_map: torch.Tensor = None,
+    mask: torch.Tensor = None,
+    height_map: torch.Tensor = None,
     map_projector: MapProjector = None,
     is_height_map: bool = None
   ):
-    """A simple top-down map wrapper.
+    """Create top-down map.
 
     Args:
-        topdown_map (Union[np.ndarray, torch.Tensor]): top-down map.
-            Defaults to None.
-        mask (Union[np.ndarray, torch.Tensor]): mask. Defaults to None.
-        height_map (Union[np.ndarray, torch.Tensor], optional): height map.
-            Defaults to None.
+        topdown_map (torch.Tensor, optional): top-down map. Defaults to None.
+        mask (torch.Tensor, optional): mask. Defaults to None.
+        height_map (torch.Tensor, optional): height map. Defaults to None.
         map_projector (MapProjector, optional): map projector. Defaults to None.
-        is_height_map (bool, optional): whether the top-down map is a height
-            map, so that we don't need to store two copies. Defaults to None.
+        is_height_map (bool, optional): determine if this top-down map is a height
+            map. Defaults to None.
     """
     self._proj = map_projector
     self._topdown_map = topdown_map
     self._mask = mask
     self._height_map = height_map
+    # If is_height_map is None, check if topdown_map and
+    # height_map are the same instance.
     if is_height_map is None:
-      if not self.is_empty:
-        is_height_map = (topdown_map is height_map)
-      else:
-        is_height_map = False
+      is_height_map = (not self.is_empty
+        and topdown_map is height_map)
     self._is_height_map = is_height_map
 
   @property
-  def is_empty(self):
+  def is_empty(self) -> bool:
+    """Return True if `topdown_map` is not set"""
     return self.topdown_map is None
 
   @property
-  def is_height_map(self):
+  def is_height_map(self) -> bool:
     """Whether this top-down map is a height map"""
     return self._is_height_map
 
   @property
-  def map(self):
+  def map(self) -> torch.Tensor:
     """Shortcut to self.topdown_map"""
     return self._topdown_map
   
   @property
-  def topdown_map(self):
+  def topdown_map(self) -> torch.Tensor:
+    """Return topdown map"""
     return self._topdown_map
 
   @property
-  def height_map(self):
+  def height_map(self) -> torch.Tensor:
+    """Return height map"""
     if self.is_height_map:
       return self.topdown_map
     else:
       return self._height_map
 
   @property
-  def mask(self):
+  def mask(self) -> torch.Tensor:
+    """Return mask"""
     return self._mask
 
   @property
-  def proj(self):
+  def proj(self) -> MapProjector:
     """Return map projector of this map"""
     return self._proj
 
   def get_camera(
+    self
+  ):
+    """Get the image coordinates of camera
+
+    Returns:
+        torch.Tensor: camera position in image coordinates.
+            (b, 2). torch.int64
+    """
+    # The camera a.k.a. local origin is at (0, 0, 0)
+    cam_pos = torch.zeros((3,), dtype=torch.float32)
+    cam_pos = self.get_coords(
+      points = cam_pos,
+      is_global = False
+    ) # (b, 1, 2)
+    return cam_pos.squeeze(dim=-2) # (b, 2)
+
+  def get_origin(
     self,
   ):
-    # get camera coordinates
-    cam_pos = np.asarray([0., 0., 0.])
+    """Get the image coordinates of global origin
+
+    Returns:
+        torch.Tensor: camera position in image coordinates.
+            (b, 2). torch.int64
+    """
+    # The global origin is at (0, 0, 0)
+    origin_pos = torch.zeros((3,), dtype=torch.float32)
+    origin_pos = self.get_coords(
+      points = origin_pos,
+      is_global = True
+    ) # (b, 1, 2)
+    return origin_pos.squeeze(dim=-2) # (b, 2)
+
+  def get_coords(
+    self,
+    points: torch.Tensor,
+    is_global: bool = True
+  ):
+    """Get the image coordinates of `points` in global space or local space
+
+    Args:
+        points (torch.Tensor): points in shape (3,), (n, 3), (b, n, 3),
+            (b, ..., n, 3), where `n` is the number of points. torch.float32.
+        is_global (bool, optional): whether this points is in global space.
+            Defaults to True.
+
+    Returns:
+        torch.Tensor: image coordinates of the points. (b, n, 2) or (b, ..., n, 2).
+            torch.int64.
+    """
+    # Ensure tensor shape (b, n, 3)
+    points = utils.to_tensor(points)
+    if len(points.shape) < 3:
+      points = points.view(1, -1, 3)
     if self.proj.to_global:
-      cam_pos = self.proj.local_to_global_space(
-        points = cam_pos
-      )
-    cam_pos_x, cam_pos_z = self.proj.map_quantize(
-      x_coords = cam_pos[..., 0],
-      z_coords = cam_pos[..., 2],
+      if not is_global:
+        # Convert to global coordinates
+        points = self.proj.local_to_global_space(
+          points = points
+        )
+    else:
+      if is_global:
+        # Convert to local coordinates
+        points = self.proj.global_to_local_space(
+          points = points
+        )
+    # Convert to image coordinates
+    pos_x, pos_z = self.proj.map_quantize(
+      x_coords = points[..., 0],
+      z_coords = points[..., 2]
     )
-    cam_pos = torch.stack((cam_pos_x, cam_pos_z), dim=-1) # (b, 1, 2)
-    return cam_pos.squeeze(dim=-2)
+    pos = torch.stack((pos_x, pos_z), dim=-1) # (b, n, 2)
+    return pos
+
+  def get_points(
+    self,
+    coords: torch.Tensor
+  ):
+    """Get x, z coordinates of `coords` in image coordinates
+
+    Args:
+        coords (torch.Tensor): image coordinates. (2,), (n, 2), (b, n, 2),
+            (b, ..., n, 2). torch.int64
+    
+    Returns:
+        torch.Tensor: x, z coordinates. (b, n, 2) or (b, ..., n, 2).
+            torch.float32
+    """
+    coords = utils.to_tensor(coords)
+    if len(coords.shape) < 3:
+      coords = coords.view(1, -1, 2)
+    pos_x, pos_z = self.proj.map_dequantize(
+      x_coords = coords[..., 0],
+      z_coords = coords[..., 1]
+    )
+    pos = torch.stack((pos_x, pos_z), dim=-1) # (b, n, 2)
+    return pos
 
   def select(
     self,
@@ -1635,9 +1761,8 @@ class TopdownMap():
     crop_width: int,
     crop_height: int,
     fill_value: float = None,
-    mode: str = 'nearest',
   ):
-    """Select region
+    """Select map region, a.k.a. "resize with crop or pad"
 
     Args:
         center (torch.Tensor): center coordinates of the region. (b, 2).
@@ -1645,7 +1770,6 @@ class TopdownMap():
         crop_width (int): width to crop.
         crop_height (int): height to crop.
         fill_value (float, optional): default values to fill in. Defaults to None.
-        mode (str, optional): interpolation mode. Defaults to 'nearest'.
     
     Returns:
       TopdownMap: cropped top-down map.
@@ -1656,10 +1780,96 @@ class TopdownMap():
       crop_width = crop_width,
       crop_height = crop_height,
       fill_value = fill_value,
-      mode = mode,
       _validate_args = True
     )
 
+  def merge(
+    self,
+    *sources: List['TopdownMap'],
+  ):
+    raise NotImplementedError
+
+# ===== TopdownMap functional API =====
+
+def crop_topdown_map(
+  source: TopdownMap,
+  center: torch.Tensor,
+  crop_width: int,
+  crop_height: int,
+  fill_value: float = None,
+  mode: str = 'nearest',
+  _validate_args: bool = True
+):
+  """Differentiable crop top-down map
+
+  Args:
+      source (TopdownMap): top-down map to crop.
+      center (torch.Tensor): center coordinates. (b, 2).
+      crop_width (int): image width.
+      crop_height (int): image height.
+      fill_value (float, optional): default values to fill in. Defaults to None.
+      mode (str, optional): interpolation mode. Defaults to 'nearest'.
+
+  Returns:
+      TopdownMap: cropped top-down map.
+  """
+  proj = source.proj
+  # Convert center to image coordinates
+  if _validate_args:
+    (center, width_offset, height_offset) = utils.validate_tensors(
+      center, proj.width_offset, proj.height_offset,
+      same_device = True
+    )
+    center = center.view(-1, 2)
+  # Compute affine grid for cropping image
+  grid = utils.generate_crop_grid(
+    center = center,
+    image_width = source.proj.map_width,
+    image_height = source.proj.map_height,
+    crop_width = crop_width,
+    crop_height = crop_height
+  )
+  # crop height maps
+  height_map = utils.image_sample(
+    image = source.height_map,
+    grid = grid,
+    fill_value = -np.inf,
+    mode = mode
+  )
+  # crop masks
+  mask = utils.image_sample(
+    image = source.mask,
+    grid = grid,
+    fill_value = False,
+    mode = mode
+  )
+  # crop top-down map
+  topdown_map = height_map
+  if not source.is_height_map:
+    topdown_map = utils.image_sample(
+      image = source.topdown_map,
+      grid = grid,
+      fill_value = fill_value,
+      mode = mode
+    )
+  # Update offsets
+  if proj.flip_h:
+    center[..., 1] = (proj.map_height-1) - center[..., 1]
+  width_offset = width_offset + crop_width/2 - center[..., 0]
+  height_offset = height_offset + crop_height/2 - center[..., 1]
+  map_projector = proj.clone(
+    width_offset = width_offset,
+    height_offset = height_offset,
+    map_width = crop_width,
+    map_height = crop_height,
+  )
+  return TopdownMap(
+    topdown_map = topdown_map,
+    mask = mask,
+    height_map = height_map,
+    is_height_map = source.is_height_map,
+    map_projector = map_projector
+  )
 
 def _flattened_topdown_map(
   source: TopdownMap
@@ -1743,24 +1953,6 @@ def _merge_topdown_maps(
     values = None
   return points, masks, values
 
-def _compute_bounding_box(
-  x_coords: torch.Tensor,
-  z_coords: torch.Tensor,
-  cam_pos_x: torch.Tensor = None,
-  cam_pos_z: torch.Tensor = None,
-):
-  x = x_coords
-  z = z_coords
-  min_x, max_x = torch.min(x), torch.max(x)
-  min_z, max_z = torch.min(z), torch.max(z)
-  if cam_pos_x is not None:
-    min_x = torch.minimum(min_x, cam_pos_x)
-    max_x = torch.maximum(max_x, cam_pos_x)
-  if cam_pos_z is not None:
-    min_z = torch.minimum(min_z, cam_pos_z)
-    max_z = torch.maximum(max_z, cam_pos_z)
-  return min_x, max_x, min_z, max_z
-
 def _compute_new_shape_and_offsets(
   points: torch.Tensor,
   map_projector: MapProjector,
@@ -1781,34 +1973,24 @@ def _compute_new_shape_and_offsets(
       map_height = map_height
     )
   else:
-    # Compute bounding box (points + camera position)
+    # Compute bounding box for each batch
     x_coords, z_coords = proj.map_quantize(
       x_coords = points[..., 0],
       z_coords = points[..., 2],
       width_offset = 0.,
       height_offset = 0.,
       flip_h = False
-    )
-    cam_pos = utils.to_tensor_like(torch.zeros(3,), points)
-    if proj.to_global:
-      cam_pos = proj.local_to_global_space(points=cam_pos)
-    cam_pos_x, cam_pos_z = proj.map_quantize(
-      x_coords = cam_pos[..., 0],
-      z_coords = cam_pos[..., 2],
-      width_offset = 0.,
-      height_offset = 0.,
-      flip_h = False
-    )
-    min_x, max_x, min_z, max_z = _compute_bounding_box(
-      x_coords = x_coords,
-      z_coords = z_coords,
-      cam_pos_x = cam_pos_x,
-      cam_pos_z = cam_pos_z
-    )
-    # Compute width, height
+    ) # (b, n)
+    # All dimensions except `b`
+    dims = list(range(1, len(x_coords.shape)))
+    min_x = torch.amin(x_coords, dim=dims) # (b,)
+    max_x = torch.amax(x_coords, dim=dims)
+    min_z = torch.amin(z_coords, dim=dims)
+    max_z = torch.amax(z_coords, dim=dims)
+    # Find the largest bounding box
     padding = 2
-    map_width = ((max_x - min_x) + padding).item()
-    map_height = ((max_z - min_z) + padding).item()
+    map_width = torch.max((max_x - min_x)).item() + padding
+    map_height = torch.max((max_z - min_z)).item() + padding
     # Compute offsets
     center_pos_x = (max_x + min_x) / 2.
     center_pos_z = (max_z + min_z) / 2.
@@ -1887,7 +2069,7 @@ def fuse_topdown_maps(
     # project height map
     flat_indices = torch.flatten(indices, -2, -1)
     flat_masks = torch.flatten(masks, -2, -1)
-    flat_height_map = _safe_gather(
+    flat_height_map = _masked_gather(
       values = points[..., 1],
       indices = flat_indices,
       masks = flat_masks,
@@ -1910,78 +2092,46 @@ def fuse_topdown_maps(
   )
   return topdown_map
 
-def crop_topdown_map(
-  source: TopdownMap,
-  center: torch.Tensor,
-  crop_width: int,
-  crop_height: int,
-  fill_value: float = None,
-  mode: str = 'nearest',
-  _validate_args: bool = True
+def merge_topdown_maps(
+  target: TopdownMap,
+  *sources: List[TopdownMap]
 ):
-  """Crop topdown map
+  """Merge top-down maps by reprojecting `sources` TopdownMaps to the `target`
+  TopdownMap. Note that this method is more efficient than `fuse_topdown_maps`
+  if the `target` TopdownMap is large, because this method does not reproject
+  the target TopdownMap while `fuse_topdown_maps` does. Algorithm as follows:
+  1. Find the bounding box (bbox) around the target and sources top-down maps
+  2. Find the center of that bbox
+  3. Crop the image with certain width and height:
+      3a. if keep_shape is True, crop the image to target top-down map's size
+      3b. if keep_shape is False, crop the image to bbox size
+  4. Convert source top-down maps to point clouds in cropped top-down map's
+      coordinates
+  5. Treat target top-down map as the base canvas and reproject source point
+      clouds to it
+  Exception handling:
+  i. sources are empty: return target top-down map
+  ii. target are empty: apply `fuse_topdown_maps` to sources
 
   Args:
-      source (TopdownMap): [description]
-      center (torch.Tensor): [description]
-      crop_width (int): [description]
-      crop_height (int): [description]
-      fill_value (float, optional): [description]. Defaults to None.
-      mode (str, optional): [description]. Defaults to 'nearest'.
+      target (TopdownMap): target top-down map that `sources` being projected to.
+      sources (List[TopdownMap]): source top-down maps to be projected.
 
   Returns:
-      TopdownMap: cropped top-down map.
+      TopdownMap: merged top-down maps
   """
-  proj = source.proj
-  # Convert center to image coordinates
-  if _validate_args:
-    (center, width_offset, height_offset) = utils.validate_tensors(
-      center, proj.width_offset, proj.height_offset,
-      same_device = True
+  raise NotImplementedError
+
+  all_empty = all([src.is_empty for src in sources])
+  if len(sources) == 0 or all_empty:
+    return target
+  if target.is_empty:
+    return fuse_topdown_maps(
+      *sources,
+      map_projector = target.proj,
+      center_mode = CenterMode.none,
+      keep_shape = False
     )
-    center = utils.to_tensor(center).view(-1, 2)
-  height_map, grid = utils.filled_crop_image(
-    source.height_map,
-    center = center,
-    crop_width = crop_width,
-    crop_height = crop_height,
-    fill_value = -np.inf,
-    mode = mode,
-    _validate_args = _validate_args,
-    get_grid = True
-  )
-  mask = utils.filled_crop_image_by_grid(
-    source.mask,
-    grid = grid,
-    fill_value = False,
-    mode = mode,
-    _validate_args = _validate_args
-  )
-  topdown_map = height_map
-  if not source.is_height_map:
-    topdown_map = utils.filled_crop_image_by_grid(
-      source.topdown_map,
-      grid = grid,
-      fill_value = fill_value,
-      mode = mode,
-      _validate_args = _validate_args
-    )
-  width_offset = width_offset + crop_width/2 - center[..., 0]
-  height_offset = (height_offset + crop_height/2
-      - ((proj.map_height-1) - center[..., 1])) # flip
-  map_projector = proj.clone(
-    width_offset = width_offset,
-    height_offset = height_offset,
-    map_width = crop_width,
-    map_height = crop_height,
-  )
-  return TopdownMap(
-    topdown_map = topdown_map,
-    mask = mask,
-    height_map = height_map,
-    is_height_map = source.is_height_map,
-    map_projector = map_projector
-  )
 
 class MapBuilder():
   def __init__(

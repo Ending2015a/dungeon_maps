@@ -10,6 +10,27 @@ import torch_scatter
 
 # ======== Utils =========
 
+__all__ = [
+  'StateObject',
+  'get_camera_intrinsics',
+  # --- PyTorch utils ----
+  'to_numpy',
+  'to_tensor',
+  'to_tensor_like',
+  'validate_tensors',
+  # --- Transformations ----
+  'translate',
+  'rotate',
+  'ravel_index',
+  'scatter_max',
+  # --- Image utils ----
+  'to_4D_image',
+  'from_4D_image',
+  'generate_image_coords',
+  'generate_crop_grid',
+  'image_sample',
+]
+
 class StateObject(dict):
   def __new__(cls, *args, **kwargs):
     self = super().__new__(cls, *args, **kwargs)
@@ -422,10 +443,10 @@ def generate_crop_grid(
   crop_height: int,
   device: torch.device = None
 ):
-  """[summary]
+  """Generate affine grid for cropping.
 
   Args:
-      center (torch.Tensor): (b, 2)
+      center (torch.Tensor): cropping center coordinates (b, 2)
       image_width (int): image width.
       image_height (int): image height.
       crop_width (int): width to crop.
@@ -439,10 +460,14 @@ def generate_crop_grid(
   center = center.view(-1, 2).to(dtype=torch.int64)
   batch = center.shape[0]
   h, w = image_height, image_width
+  # padding left right top bottom
+  center += 1
+  h += 2
+  w += 2
   x, y = generate_image_coords(
     (batch, crop_height, crop_width),
     dtype = torch.int64,
-    device = device
+    device = center.device
   )
   ndims = len(x.shape)
   center_x = (center[..., 0] - w//2).view((-1,)+(1,)*(ndims-1)) # (b, ...)
@@ -452,145 +477,46 @@ def generate_crop_grid(
   grid = torch.stack((x, y), dim=-1)
   return grid
 
-def crop_image(
-  image: torch.Tensor,
-  center: torch.Tensor,
-  crop_width: int,
-  crop_height: int,
-  mode: str = 'nearest',
-  padding_mode: str = 'zeros',
-  get_grid: bool = False,
-  _validate_args: bool = True
-):
-  """Crop image
-
-  Args:
-      image (torch.Tensor): 2/3/4D image (b, c, h, w).
-      center (torch.Tensor): center coordinates (b, 2). torch.int64
-      crop_width (int): width to crop.
-      crop_height (int): height to crp
-      mode (str, optional): inerpolation mode. Defaults to 'nearest'.
-      padding_mode (str, optional): padding mode. Defaults to 'zeros'.
-  
-  Returns:
-      torch.Tensor: cropped image (b, c, h, w).
-  """  
-  if _validate_args:
-    (image, center) = validate_tensors(
-      image, center, same_device = True
-    )
-    # Ensure tensor shapes
-    image = to_4D_image(image)
-    center = center.view(-1, 2)
-    # Ensure tensor dtypes
-    center = center.to(dtype=torch.int64)
-  h, w = image.shape[-2:]
-  grid = generate_crop_grid(
-    center = center,
-    image_width = w,
-    image_height = h,
-    crop_width = crop_width,
-    crop_height = crop_height,
-    device = image.device
-  )
-  orig_dtype = image.dtype
-  image = image.to(dtype=grid.dtype)
-  image = nn.functional.grid_sample(image, grid, mode=mode,
-      padding_mode=padding_mode, align_corners=False)
-  image = image.to(dtype=orig_dtype)
-  if get_grid:
-    return image, grid
-  return image
-
-def filled_crop_image(
-  image: torch.Tensor,
-  center: torch.Tensor,
-  crop_width: int,
-  crop_height: int,
-  fill_value: Any,
-  mode: str = 'nearest',
-  get_grid: bool = False,
-  _validate_args: bool = True
-):
-  """Crop image with default values. If `fill_values` is set to None, this method
-  is reduced to `crop_image`
-
-  Args:
-      image (torch.Tensor): 2/3/4D image (b, c, h, w).
-      center (torch.Tensor): center coordinates (b, 2). torch.int64
-      crop_width (int): width to crop.
-      crop_height (int): height to crp
-      fill_values (Any): values to fill in.
-      mode (str, optional): inerpolation mode. Defaults to 'nearest'.
-  
-  Returns:
-      torch.Tensor: cropped image (b, c, h, w).
-  """
-  if _validate_args:
-    (image, center) = validate_tensors(
-      image, center, same_device = True
-    )
-    # Ensure tensor shapes
-    image = to_4D_image(image)
-    center = center.view(-1, 2)
-    # Ensure tensor dtypes
-    center = center.to(dtype=torch.int64)
-  padding_mode = 'zeros'
-  if fill_value is not None:
-    pad = [1, 1, 1, 1] # pad borders
-    image = nn.functional.pad(image, pad, mode='constant', value=fill_value)
-    center = center + 1
-    padding_mode = 'border'
-  return crop_image(
-    image = image,
-    center = center,
-    crop_width = crop_width,
-    crop_height = crop_height,
-    mode = mode,
-    padding_mode = padding_mode,
-    get_grid = get_grid,
-  )
-
-def filled_crop_image_by_grid(
+def image_sample(
   image: torch.Tensor,
   grid: torch.Tensor,
-  fill_value: Any,
+  fill_value: Any = None,
   mode: str = 'nearest',
   _validate_args: bool = True
 ):
-  """Crop image with default values. If `fill_values` is set to None, this method
-  is reduced to `crop_image`
+  """Sample image by affine grid
 
   Args:
-      image (torch.Tensor): 2/3/4D image (b, c, h, w).
-      center (torch.Tensor): center coordinates (b, 2). torch.int64
-      crop_width (int): width to crop.
-      crop_height (int): height to crp
-      fill_value (Any): values to fill in.
-      mode (str, optional): inerpolation mode. Defaults to 'nearest'.
-  
+      image (torch.Tensor): image tensor (b, c, h, w). torch.float32
+      grid (torch.Tensor): affine grid (b, mh, mw, 2), usually generated from
+          `generate_crop_grid`. torch.float32
+      fill_value (Any, optional): default values to fill in. Defaults to None.
+      mode (str, optional): sampling method. Defaults to 'nearest'.
+
   Returns:
-      torch.Tensor: cropped image (b, c, h, w).
+      torch.Tensor: sampled image tensor (b, c, mh, mw), torch.float32.
   """
   if _validate_args:
-    (image, grid) = validate_tensors(
-      image, grid, same_device = True
-    )
+    image, grid = validate_tensors(image, grid, same_device=True)
     # Ensure tensor shapes
     image = to_4D_image(image)
-    # Ensure tensor dtypes
-    grid = grid.to(dtype=torch.float32)
-  padding_mode = 'zeros'
-  if fill_value is not None:
-    pad = [1, 1, 1, 1] # pad borders
-    image = nn.functional.pad(image, pad, mode='constant', value=fill_value)
-    padding_mode = 'border'
+  padding_mode = 'border'
+  if fill_value is None:
+    fill_value = 0.0 # pad zeros
+    padding_mode = 'zeros'
+  # pad default values
+  pad = [1, 1, 1, 1]
+  image = nn.functional.pad(image, pad, mode='constant', value=fill_value)
   orig_dtype = image.dtype
+  # grid_sample restrict the image type to be same as grid
   image = image.to(dtype=grid.dtype)
   image = nn.functional.grid_sample(image, grid, mode=mode,
       padding_mode=padding_mode, align_corners=False)
   image = image.to(dtype=orig_dtype)
   return image
+
+# ======= Deprecated utilities ========
+# these utilities will be removed soon
 
 def gather_nd(
   params: torch.Tensor,

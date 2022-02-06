@@ -67,17 +67,9 @@ def render_scene(rgb, depth, world_map, local_map, cam_pose):
   scene = np.concatenate((bgr_image, depth_image), axis=1)
   # Plot occlusion map
   cam_pos = world_map.get_camera()
-  crop_map = world_map.select(cam_pos.to(device='cuda'), 600, 600)
-  crop_occ_map = vis.draw_occlusion_map(
-    crop_map.height_map,
-    crop_map.mask
-  )
-  crop_occ_map = vis.draw_camera(crop_occ_map, crop_map.proj)
-  local_occ_map = vis.draw_occlusion_map(
-    local_map.height_map,
-    local_map.mask
-  )
-  local_occ_map = vis.draw_camera(local_occ_map, local_map.proj)
+  crop_map = world_map.select(cam_pos, 600, 600)
+  crop_occ_map = vis.draw_map(crop_map)
+  local_occ_map = vis.draw_map(local_map)
   # Concat occlution maps
   local_occ_map = np.pad(local_occ_map, ((0, 0), (25, 25), (0, 0)),
       mode='constant', constant_values=0)
