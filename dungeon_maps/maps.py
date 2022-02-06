@@ -1,7 +1,6 @@
 # --- built in ---
 import enum
-from re import X
-from typing import Union, List
+from typing import List
 # --- 3rd party ---
 import numpy as np
 import torch

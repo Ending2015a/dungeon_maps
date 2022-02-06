@@ -1,5 +1,4 @@
 # --- built in ---
-import math
 from typing import Any
 # --- 3rd party ---
 import numpy as np
@@ -28,7 +27,7 @@ __all__ = [
   'from_4D_image',
   'generate_image_coords',
   'generate_crop_grid',
-  'image_sample',
+  'image_sample'
 ]
 
 class StateObject(dict):
