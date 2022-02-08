@@ -119,6 +119,7 @@ def orth_project(
   to_global: bool,
   flip_h: bool = True,
   get_height_map: bool = False,
+  device: torch.device = None,
   _validate_args: bool = True
 ):
   """Project batch UNNORMALIZED depth maps to top-down maps or project
@@ -184,7 +185,7 @@ def orth_project(
       cam_pitch, cam_height) = utils.validate_tensors(
         depth_map, cam_pose, width_offset, height_offset,
         cam_pitch, cam_height,
-        same_device = True
+        same_device = device or True
     )
     # Ensure tensor shape at least 4D (b, ..., h, w)
     depth_map = utils.to_4D_image(depth_map) # (b, c, h, w)
@@ -205,10 +206,12 @@ def orth_project(
     cam_height = cam_height.to(dtype=torch.float32)
     # Convert optional value maps
     if value_map is not None:
-      (depth_map, value_map) = utils.validate_tensors(
-        depth_map, value_map, same_device=True
+      device = depth_map.device
+      value_map = utils.validate_tensors(
+        value_map, same_device=device
       )
       value_map = utils.to_4D_image(value_map) # (b, c, h, w)
+  device = depth_map.device
   # Convert depth map to point cloud
   point_cloud, valid_area = depth_map_to_point_cloud(
     depth_map = depth_map,
@@ -266,7 +269,7 @@ def orth_project(
   coords = torch.stack((z_bin, x_bin), dim=-1)
   canvas = torch.zeros(
     (*coords.shape[:-2], map_height, map_width),
-    device=coords.device
+    device = device
   )
   topdown_map, masks, indices = project(
     coords = coords,
@@ -310,6 +313,7 @@ def camera_affine_grid(
   center_x: float,
   center_y: float,
   flip_h: bool = True,
+  device: torch.device = None,
   _validate_args: bool = True
 ):
   """Generates camera space flow fields with the given `depth_map` at time `t`.
@@ -338,7 +342,8 @@ def camera_affine_grid(
   if _validate_args:
     # Convert to tensors and ensure they are on the same device
     (depth_map, trans_pose, cam_pitch, cam_height) = utils.validate_tensors(
-        depth_map, trans_pose, cam_pitch, cam_height, same_device = True
+        depth_map, trans_pose, cam_pitch, cam_height,
+        same_device = device or True
     )
     # Ensure tensor shape at least 4D (b, ..., h, w)
     depth_map = utils.to_4D_image(depth_map) # (b, c, h, w)
@@ -409,6 +414,7 @@ def depth_map_to_point_cloud(
   trunc_depth_min: float,
   trunc_depth_max: float,
   flip_h: bool = True,
+  device: torch.device = None,
   _validate_args: bool = True
 ):
   """Generate point clouds from `depth_map`. The generated point clouds are
@@ -439,15 +445,16 @@ def depth_map_to_point_cloud(
   """
   if _validate_args:
     # Convert to tensors and ensure they are on the same device
-    depth_map = utils.validate_tensors(depth_map, same_device=True)
+    depth_map = utils.validate_tensors(depth_map, same_device=device or True)
     # Ensure tensor shape at least 4D (b, ..., h, w)
     depth_map = utils.to_4D_image(depth_map) # (b, c, h, w)
     # Ensure dtypes
     depth_map = depth_map.to(dtype=torch.float32)
+  device = depth_map.device
   x, y = utils.generate_image_coords(
     depth_map.shape,
     dtype = torch.float32,
-    device = depth_map.device
+    device = device
   ) # same shape as depth_map
   z = depth_map # (..., h, w)
   points = torch.stack((x, y, z), dim=-1)
@@ -477,6 +484,7 @@ def height_map_to_point_cloud(
   map_width: int,
   map_height: int,
   flip_h: bool = True,
+  device: torch.device = None,
   _validate_args: bool = True
 ):
   """Generate point cloud from `height_map`.
@@ -507,7 +515,7 @@ def height_map_to_point_cloud(
     # Convert to tensors and ensure they are on the same device
     (height_map, width_offset, height_offset) = utils.validate_tensors(
       height_map, width_offset, height_offset,
-      same_device=True
+      same_device = device or True
     )
     # Ensure tensor shape at least 4D
     height_map = utils.to_4D_image(height_map) # (b, c, h, w)
@@ -517,10 +525,11 @@ def height_map_to_point_cloud(
     height_map = height_map.to(dtype=torch.float32)
     width_offset = width_offset.to(dtype=torch.float32)
     height_offset = height_offset.to(dtype=torch.float32)
+  device = height_map.device
   x_bin, z_bin = utils.generate_image_coords(
     height_map.shape,
     dtype = torch.float32,
-    device = height_map.device
+    device = device
   )
   x, z = map_dequantize(
     x_coords = x_bin,
@@ -545,6 +554,7 @@ def image_to_camera_space(
   center_y: float,
   flip_h: bool = True,
   height: int = None,
+  device: torch.device = None,
   _validate_args: bool = True
 ):
   """Transform 3D points in image space to camera space.
@@ -571,7 +581,7 @@ def image_to_camera_space(
   """
   if _validate_args:
     # Convert to tensors and ensure they are on the same device
-    points = utils.validate_tensors(points, same_device=True)
+    points = utils.validate_tensors(points, same_device=device or True)
     # Ensure tensor shapes
     orig_shape = points.shape
     orig_ndims = len(orig_shape)
@@ -611,6 +621,7 @@ def camera_to_image_space(
   center_y: float,
   flip_h: bool = True,
   height: int = None,
+  device: torch.device = None,
   _validate_args: bool = True
 ):
   """Transform 3D points in camera space to image space.
@@ -637,7 +648,7 @@ def camera_to_image_space(
   """
   if _validate_args:
     # Convert to tensors and ensure they are on the same device
-    points = utils.validate_tensors(points, same_device=True)
+    points = utils.validate_tensors(points, same_device=device or True)
     # Ensure tensor shapes
     orig_shape = points.shape
     orig_ndims = len(orig_shape)
@@ -674,6 +685,7 @@ def camera_to_local_space(
   points: torch.Tensor,
   cam_pitch: torch.Tensor,
   cam_height: torch.Tensor,
+  device: torch.device = None,
   _validate_args: bool = True
 ):
   """Transform 3D points from camera space to local space
@@ -688,7 +700,7 @@ def camera_to_local_space(
   """
   if _validate_args:
     (points, cam_pitch, cam_height) = utils.validate_tensors(
-      points, cam_pitch, cam_height, same_device=True
+      points, cam_pitch, cam_height, same_device=device or True
     )
     # Ensure tensor shapes
     orig_shape = points.shape
@@ -721,6 +733,7 @@ def local_to_camera_space(
   points: torch.Tensor,
   cam_pitch: torch.Tensor,
   cam_height: torch.Tensor,
+  device: torch.device = None,
   _validate_args: bool = True
 ):
   """Transform points from local space to camera space
@@ -735,7 +748,7 @@ def local_to_camera_space(
   """
   if _validate_args:
     (points, cam_pitch, cam_height) = utils.validate_tensors(
-      points, cam_pitch, cam_height, same_device=True
+      points, cam_pitch, cam_height, same_device=device or True
     )
     # Ensure tensor shapes
     orig_shape = points.shape
@@ -766,6 +779,7 @@ def local_to_camera_space(
 def local_to_global_space(
   points: torch.Tensor,
   cam_pose: torch.Tensor,
+  device: torch.device = None,
   _validate_args: bool = True
 ):
   """Transform points from local space to global space
@@ -780,7 +794,7 @@ def local_to_global_space(
   """
   if _validate_args:
     (points, cam_pose) = utils.validate_tensors(
-      points, cam_pose, same_device=True
+      points, cam_pose, same_device=device or True
     )
     # Ensure tensor shapes
     orig_shape = points.shape
@@ -811,6 +825,7 @@ def local_to_global_space(
 def global_to_local_space(
   points: torch.Tensor,
   cam_pose: torch.Tensor,
+  device: torch.device = None,
   _validate_args: bool = True
 ):
   """Transform points from global space to local space
@@ -825,7 +840,7 @@ def global_to_local_space(
   """
   if _validate_args:
     (points, cam_pose) = utils.validate_tensors(
-      points, cam_pose, same_device=True
+      points, cam_pose, same_device=device or True
     )
     # Ensure tensor shapes
     orig_shape = points.shape
@@ -861,6 +876,7 @@ def map_quantize(
   map_res: float,
   map_height: int = None,
   flip_h: bool = True,
+  device: torch.device = None,
   _validate_args: bool = True
 ):
   """Quantize x, z coordinates of points into bins
@@ -885,7 +901,8 @@ def map_quantize(
   """
   if _validate_args:
     (x_coords, z_coords, width_offset, height_offset) = utils.validate_tensors(
-      x_coords, z_coords, width_offset, height_offset, same_device=True
+      x_coords, z_coords, width_offset, height_offset,
+      same_device = device or True
     )
     # Ensure tensor shapes
     x_coords, z_coords = torch.broadcast_tensors(x_coords, z_coords)
@@ -902,6 +919,7 @@ def map_quantize(
     z_coords = z_coords.to(dtype=torch.float32)
     width_offset = width_offset.to(dtype=torch.float32)
     height_offset = height_offset.to(dtype=torch.float32)
+  device = x_coords.device
   ndims = len(x_coords.shape)
   # broadcast offsets to match the rank of coords
   width_offset = width_offset.view((-1,)+(1,)*(ndims-1))
@@ -913,11 +931,14 @@ def map_quantize(
   z_bin = z / map_res + height_offset
   if flip_h:
     assert map_height is not None
-    map_height = utils.to_tensor_like(map_height, x_coords)
+    map_height = torch.tensor(map_height, device=device)
     z_bin = (map_height-1) - z_bin
-  z_bin = z_bin
-  x_bin = torch.round(x_bin).to(dtype=torch.int64)
-  z_bin = torch.round(z_bin).to(dtype=torch.int64)
+  # Note that torch.round use half-to-even rounding
+  # instead, we use up rounding.
+  x_bin = torch.floor(x_bin+0.5).to(dtype=torch.int64)
+  z_bin = torch.floor(z_bin+0.5).to(dtype=torch.int64)
+  #x_bin = torch.round(x_bin).to(dtype=torch.int64)
+  #z_bin = torch.round(z_bin).to(dtype=torch.int64)
   if _validate_args:
     x_coords = x_coords.view(orig_shape)
     z_coords = z_coords.view(orig_shape)
@@ -931,6 +952,7 @@ def map_dequantize(
   map_res: float,
   map_height: int = None,
   flip_h: bool = True,
+  device: torch.device = None,
   _validate_args: bool = True
 ):
   """The inverse operation of `map_quantize`
@@ -955,7 +977,8 @@ def map_dequantize(
   """
   if _validate_args:
     (x_coords, z_coords, width_offset, height_offset) = utils.validate_tensors(
-      x_coords, z_coords, width_offset, height_offset, same_device=True
+      x_coords, z_coords, width_offset, height_offset,
+      same_device = device or True
     )
     # Ensure tensor shapes
     x_coords, z_coords = torch.broadcast_tensors(x_coords, z_coords)
@@ -972,6 +995,7 @@ def map_dequantize(
     z_coords = z_coords.to(dtype=torch.float32)
     width_offset = width_offset.to(dtype=torch.float32)
     height_offset = height_offset.to(dtype=torch.float32)
+  device = x_coords.device
   ndims = len(x_coords.shape)
   # broadcast offsets to match the rank of coords
   width_offset = width_offset.view((-1,)+(1,)*(ndims-1))
@@ -980,7 +1004,7 @@ def map_dequantize(
   z_bin = z_coords
   if flip_h:
     assert map_height is not None
-    map_height = utils.to_tensor_like(map_height, x_coords)
+    map_height = torch.tensor(map_height, device=device)
     z_bin = (map_height - 1) - z_bin
   z = (z_bin - height_offset) * map_res
   x = (x_bin - width_offset) * map_res
@@ -993,6 +1017,7 @@ def project(
   canvas: torch.Tensor,
   canvas_masks: torch.Tensor = None,
   fill_value: float = -np.inf,
+  device: torch.device = None,
   _validate_args: bool = True
 ):
   """Project `values` onto `canvas` with the specified `coords`.
@@ -1026,7 +1051,7 @@ def project(
   if _validate_args:
     (coords, values, masks, canvas, canvas_masks) = utils.validate_tensors(
       coords, values, masks, canvas, canvas_masks,
-      same_device = True
+      same_device = device or True
     )
     if len(coords.shape) < 3:
       coords = coords.view(1, -1, 2) # at least 3 dims (b, n, 2)
@@ -1078,6 +1103,7 @@ def compute_center_offsets(
   map_height: int,
   to_global: bool,
   center_mode: CenterMode = CenterMode.none,
+  device: torch.device = None,
   _validate_args: bool = True
 ):
   """Compute offsets to the center of maps in different centering mode.
@@ -1112,7 +1138,7 @@ def compute_center_offsets(
       height_offset = 0.
     (cam_pose, width_offset, height_offset) = utils.validate_tensors(
       cam_pose, width_offset, height_offset,
-      same_device = True,
+      same_device = device or True,
       same_dtype = torch.float32
     )
   if center_mode is CenterMode.none:
@@ -1165,7 +1191,9 @@ class MapProjector():
     trunc_depth_max: float = None,
     clip_border: int = None,
     to_global: bool = False,
-    flip_h: bool = True
+    flip_h: bool = True,
+    fill_value: float = -np.inf,
+    device: torch.device = None
   ):
     """Map Projector
     This helper class provides a simple interface to access the raw functional APIs
@@ -1203,6 +1231,9 @@ class MapProjector():
             OpenCV format, the origin (0, 0) of an image is at the upper left
             corner, which should be flipped before converting to point cloud.
             Defaults to True.
+        fill_value (float, optional): default values to fill in the map when
+            projecting. Defaults to -np.inf.
+        device (torch.device, optional): torch device. Defaults to None.
     """
     self.width = width
     self.height = height
@@ -1221,6 +1252,8 @@ class MapProjector():
     self.clip_border = clip_border
     self.to_global = to_global
     self.flip_h = flip_h
+    self.fill_value = fill_value
+    self.device = device
     # compute camera intrinsic
     self.cam_params = utils.get_camera_intrinsics(
       width = self.width,
@@ -1247,7 +1280,8 @@ class MapProjector():
     trunc_depth_max: float = None,
     clip_border: int = None,
     to_global: bool = None,
-    flip_h: bool = None
+    flip_h: bool = None,
+    device: torch.device = None
   ):
     """Clone MapProjector and override some arguments. Note that
     this method only do a shallow copy for each argument.
@@ -1276,6 +1310,7 @@ class MapProjector():
       clip_border = get(clip_border, self.clip_border),
       to_global = get(to_global, self.to_global),
       flip_h = get(flip_h, self.flip_h),
+      device = get(device, self.device)
     )
 
   def orth_project(
@@ -1300,6 +1335,7 @@ class MapProjector():
     to_global: bool = None,
     flip_h: bool = None,
     get_height_map: bool = False,
+    device: torch.device = None,
     _validate_args: bool = True
   ):
     return orth_project(
@@ -1323,6 +1359,7 @@ class MapProjector():
       to_global = get(to_global, self.to_global),
       flip_h = get(flip_h, self.flip_h),
       get_height_map = get_height_map,
+      device = get(device, self.device),
       _validate_args = _validate_args
     )
 
@@ -1337,6 +1374,7 @@ class MapProjector():
     center_x: float = None,
     center_y: float = None,
     flip_h: bool = None,
+    device: torch.device = None,
     _validate_args: bool = True
   ):
     return camera_affine_grid(
@@ -1349,6 +1387,7 @@ class MapProjector():
       center_x = get(center_x, self.cam_params.cx),
       center_y = get(center_y, self.cam_params.cy),
       flip_h = get(flip_h, self.flip_h),
+      device = get(device, self.device),
       _validate_args = _validate_args
     )
 
@@ -1362,6 +1401,7 @@ class MapProjector():
     trunc_depth_min: float = None,
     trunc_depth_max: float = None,
     flip_h: bool = None,
+    device: torch.device = None,
     _validate_args: bool = True
   ):
     return depth_map_to_point_cloud(
@@ -1373,6 +1413,7 @@ class MapProjector():
       trunc_depth_min = get(trunc_depth_min, self.trunc_depth_min),
       trunc_depth_max = get(trunc_depth_max, self.trunc_depth_max),
       flip_h = get(flip_h, self.flip_h),
+      device = get(device, self.device),
       _validate_args = _validate_args
     )
 
@@ -1385,6 +1426,7 @@ class MapProjector():
     map_width: int = None,
     map_height: int = None,
     flip_h: bool = None,
+    device: torch.device = None,
     _validate_args: bool = True
   ):
     return height_map_to_point_cloud(
@@ -1395,6 +1437,7 @@ class MapProjector():
       map_width = get(map_width, self.map_width),
       map_height = get(map_height, self.map_height),
       flip_h = get(flip_h, self.flip_h),
+      device = get(device, self.device),
       _validate_args = _validate_args
     )
 
@@ -1407,6 +1450,7 @@ class MapProjector():
     center_y: float = None,
     flip_h: bool = None,
     height: int = None,
+    device: torch.device = None,
     _validate_args: bool = True
   ):
     return image_to_camera_space(
@@ -1417,6 +1461,7 @@ class MapProjector():
       center_y = get(center_y, self.cam_params.cy),
       flip_h = get(flip_h, self.flip_h),
       height = get(height, self.height),
+      device = get(device, self.device),
       _validate_args = _validate_args
     )
 
@@ -1429,6 +1474,7 @@ class MapProjector():
     center_y: float = None,
     flip_h: bool = None,
     height: int = None,
+    device: torch.device = None,
     _validate_args: bool = True
   ):
     return camera_to_image_space(
@@ -1439,6 +1485,7 @@ class MapProjector():
       center_y = get(center_y, self.cam_params.cy),
       flip_h = get(flip_h, self.flip_h),
       height = get(height, self.height),
+      device = get(device, self.device),
       _validate_args = _validate_args
     )
 
@@ -1447,12 +1494,14 @@ class MapProjector():
     points: torch.Tensor,
     cam_pitch: torch.Tensor = None,
     cam_height: torch.Tensor = None,
+    device: torch.device = None,
     _validate_args: bool = True
   ):
     return camera_to_local_space(
       points = points,
       cam_pitch = get(cam_pitch, self.cam_pitch),
       cam_height = get(cam_height, self.cam_height),
+      device = get(device, self.device),
       _validate_args = _validate_args
     )
 
@@ -1461,12 +1510,14 @@ class MapProjector():
     points: torch.Tensor,
     cam_pitch: torch.Tensor = None,
     cam_height: torch.Tensor = None,
+    device: torch.device = None,
     _validate_args: bool = True
   ):
     return local_to_camera_space(
       points = points,
       cam_pitch = get(cam_pitch, self.cam_pitch),
       cam_height = get(cam_height, self.cam_height),
+      device = get(device, self.device),
       _validate_args = _validate_args
     )
 
@@ -1474,11 +1525,13 @@ class MapProjector():
     self,
     points: torch.Tensor,
     cam_pose: torch.Tensor = None,
+    device: torch.device = None,
     _validate_args: bool = True
   ):
     return local_to_global_space(
       points = points,
       cam_pose = get(cam_pose, self.cam_pose),
+      device = get(device, self.device),
       _validate_args = _validate_args
     )
 
@@ -1486,11 +1539,13 @@ class MapProjector():
     self,
     points: torch.Tensor,
     cam_pose: torch.Tensor = None,
+    device: torch.device = None,
     _validate_args: bool = True
   ):
     return global_to_local_space(
       points = points,
       cam_pose = get(cam_pose, self.cam_pose),
+      device = get(device, self.device),
       _validate_args = _validate_args
     )
 
@@ -1503,6 +1558,7 @@ class MapProjector():
     map_res: float = None,
     map_height: int = None,
     flip_h: bool = None,
+    device: torch.device = None,
     _validate_args: bool = True
   ):
     return map_quantize(
@@ -1513,6 +1569,7 @@ class MapProjector():
       map_res = get(map_res, self.map_res),
       map_height = get(map_height, self.map_height),
       flip_h = get(flip_h, self.flip_h),
+      device = get(device, self.device),
       _validate_args = _validate_args
     )
 
@@ -1525,6 +1582,7 @@ class MapProjector():
     map_res: float = None,
     map_height: int = None,
     flip_h: bool = None,
+    device: torch.device = None,
     _validate_args: bool = True
   ):
     return map_dequantize(
@@ -1535,6 +1593,7 @@ class MapProjector():
       map_res = get(map_res, self.map_res),
       map_height = get(map_height, self.map_height),
       flip_h = get(flip_h, self.flip_h),
+      device = get(device, self.device),
       _validate_args = _validate_args
     )
 
@@ -1545,7 +1604,8 @@ class MapProjector():
     masks: torch.Tensor,
     canvas: torch.Tensor,
     canvas_masks: torch.Tensor = None,
-    fill_value: float = -np.inf,
+    fill_value: float = None,
+    device: torch.device = None,
     _validate_args: bool = True
   ):
     return project(
@@ -1554,7 +1614,8 @@ class MapProjector():
       masks = masks,
       canvas = canvas,
       canvas_masks = canvas_masks,
-      fill_value = fill_value,
+      fill_value = get(fill_value, self.fill_value),
+      device = get(device, self.device),
       _validate_args = _validate_args
     )
 
@@ -1568,6 +1629,7 @@ class MapProjector():
     map_height: int = None,
     to_global: bool = None,
     center_mode: CenterMode = CenterMode.none,
+    device: torch.device = None,
     _validate_args: bool = True
   ):
     return compute_center_offsets(
@@ -1579,6 +1641,7 @@ class MapProjector():
       map_height = get(map_height, self.map_height),
       to_global = get(to_global, self.to_global),
       center_mode = center_mode,
+      device = get(device, self.device),
       _validate_args = _validate_args
     )
 
@@ -1848,7 +1911,7 @@ def crop_topdown_map(
     topdown_map = utils.image_sample(
       image = source.topdown_map,
       grid = grid,
-      fill_value = fill_value,
+      fill_value = get(fill_value, proj.fill_value),
       mode = mode
     )
   # Update offsets
@@ -1898,7 +1961,7 @@ def _flattened_topdown_map(
     values = None
   return points, mask, values
 
-def _merge_topdown_maps(
+def _merge_point_clouds(
   *maps: List[TopdownMap],
   map_projector: MapProjector
 ):
@@ -1952,56 +2015,52 @@ def _merge_topdown_maps(
     values = None
   return points, masks, values
 
+def _compute_bounding_box(
+  x_coords: torch.Tensor,
+  z_coords: torch.Tensor,
+  keepdim: bool = False
+):
+  dims = list(range(1, len(x_coords.shape)))
+  min_x = torch.amin(x_coords, dim=dims, keepdim=keepdim)
+  max_x = torch.amax(x_coords, dim=dims, keepdim=keepdim)
+  min_z = torch.amin(z_coords, dim=dims, keepdim=keepdim)
+  max_z = torch.amax(z_coords, dim=dims, keepdim=keepdim)
+  return min_x, max_x, min_z, max_z
+
 def _compute_new_shape_and_offsets(
   points: torch.Tensor,
-  map_projector: MapProjector,
-  center_mode: CenterMode = CenterMode.none,
-  keep_shape: bool = True,
+  map_projector: MapProjector
 ):
-  if center_mode is None:
-    center_mode = CenterMode.none
-  center_mode = CenterMode(center_mode)
   assert points is not None
   assert map_projector is not None
   proj = map_projector
-  if keep_shape:
-    map_width, map_height = proj.map_width, proj.map_height
-    width_offset, height_offset = proj.compute_center_offsets(
-      center_mode = center_mode,
-      map_width = map_width,
-      map_height = map_height
-    )
-  else:
-    # Compute bounding box for each batch
-    x_coords, z_coords = proj.map_quantize(
-      x_coords = points[..., 0],
-      z_coords = points[..., 2],
-      width_offset = 0.,
-      height_offset = 0.,
-      flip_h = False
-    ) # (b, n)
-    # All dimensions except `b`
-    dims = list(range(1, len(x_coords.shape)))
-    min_x = torch.amin(x_coords, dim=dims) # (b,)
-    max_x = torch.amax(x_coords, dim=dims)
-    min_z = torch.amin(z_coords, dim=dims)
-    max_z = torch.amax(z_coords, dim=dims)
-    # Find the largest bounding box
-    padding = 2
-    map_width = torch.max((max_x - min_x)).item() + padding
-    map_height = torch.max((max_z - min_z)).item() + padding
-    # Compute offsets
-    center_pos_x = (max_x + min_x) / 2.
-    center_pos_z = (max_z + min_z) / 2.
-    width_offset = map_width/2. - center_pos_x
-    height_offset = map_height/2. - center_pos_z
+  # Compute bounding box for each batch
+  x_coords, z_coords = proj.map_quantize(
+    x_coords = points[..., 0],
+    z_coords = points[..., 2],
+    width_offset = 0.,
+    height_offset = 0.,
+    flip_h = False
+  ) # (b, n)
+  min_x, max_x, min_z, max_z = _compute_bounding_box(
+    x_coords = x_coords,
+    z_coords = z_coords
+  ) # (b,)
+  # Find the largest bounding box
+  padding = 2
+  map_width = torch.max((max_x - min_x)).item() + padding
+  map_height = torch.max((max_z - min_z)).item() + padding
+  # Compute offsets
+  center_pos_x = (max_x + min_x) / 2.
+  center_pos_z = (max_z + min_z) / 2.
+  width_offset = map_width/2. - center_pos_x
+  height_offset = map_height/2. - center_pos_z
   return map_width, map_height, width_offset, height_offset
 
 def fuse_topdown_maps(
   *maps: List[TopdownMap],
   map_projector: MapProjector = None,
-  center_mode: CenterMode = CenterMode.none,
-  keep_shape: bool = True
+  fill_value: float = None
 ) -> TopdownMap:
   """Reproject topdown maps
 
@@ -2009,9 +2068,8 @@ def fuse_topdown_maps(
       maps (List[TopdownMap], optional): maps to be reprojected by `map_projector`.
       map_projector (MapProjector, optional): projector to reproject maps. If None,
           use the projector from the first element of `maps`. Defaults to None.
-      center_mode (CenterMode, optional): centering mode. Defaults to
-          CenterMode.none.
-      keep_shape (bool, optional): keep the map's shape. Defaults to True.
+      fill_value (float, optional): default values to fill in the map. Defaults
+          to None.
 
   Returns:
       TopdownMap: reprojected topdown map. If failed to reproject the maps, return
@@ -2025,7 +2083,7 @@ def fuse_topdown_maps(
     map_projector = maps[0].proj
   proj = map_projector
   # merge point clouds
-  points, masks, values = _merge_topdown_maps(
+  points, masks, values = _merge_point_clouds(
     *maps, map_projector=map_projector
   )
   if points is None:
@@ -2038,9 +2096,7 @@ def fuse_topdown_maps(
   (map_width, map_height, width_offset, height_offset) = \
       _compute_new_shape_and_offsets(
     points = points[masks],
-    map_projector = proj,
-    center_mode = center_mode,
-    keep_shape = keep_shape
+    map_projector = proj
   )
   x_bin, z_bin = proj.map_quantize(
     x_coords = points[..., 0],
@@ -2054,12 +2110,13 @@ def fuse_topdown_maps(
     (*coords.shape[:-2], map_height, map_width),
     device = coords.device
   )
+  fill_value = get(fill_value, proj.fill_value, -np.inf)
   topdown_map, masks, indices = proj.project(
     coords = coords,
     values = values,
     masks = masks,
     canvas = canvas,
-    fill_value = -np.inf,
+    fill_value = fill_value,
     _validate_args = False
   )
   if is_height_map:
@@ -2091,46 +2148,168 @@ def fuse_topdown_maps(
   )
   return topdown_map
 
-def merge_topdown_maps(
-  target: TopdownMap,
-  *sources: List[TopdownMap]
-):
-  """Merge top-down maps by reprojecting `sources` TopdownMaps to the `target`
-  TopdownMap. Note that this method is more efficient than `fuse_topdown_maps`
-  if the `target` TopdownMap is large, because this method does not reproject
-  the target TopdownMap while `fuse_topdown_maps` does. Algorithm as follows:
-  1. Find the bounding box (bbox) around the target and sources top-down maps
-  2. Find the center of that bbox
-  3. Crop the image with certain width and height:
-      3a. if keep_shape is True, crop the image to target top-down map's size
-      3b. if keep_shape is False, crop the image to bbox size
-  4. Convert source top-down maps to point clouds in cropped top-down map's
-      coordinates
-  5. Treat target top-down map as the base canvas and reproject source point
-      clouds to it
-  Exception handling:
-  i. sources are empty: return target top-down map
-  ii. target are empty: apply `fuse_topdown_maps` to sources
+# def _crop_and_pad_topdown_map(
+#   source: TopdownMap,
+#   bounding_box: torch.Tensor, # (b, 4)
+#   fill_value: float = None
+# ):
+#   height_map = utils.to_4D_image(source.height_map)
+#   height_maps = torch.split(height_map, 1)
+#   mask = utils.to_4D_image(source.mask)
+#   masks = torch.split(mask, 1)
+#   if not source.is_height_map:
+#     topdown_map = utils.to_4D_image(source.topdown_map)
+#     topdown_maps = torch.split(topdown_map, 1)
+#   else:
+#     topdown_map, topdown_maps = None, None
+#   bbox = bounding_box
+#   h, w = source.proj.map_height, source.proj.map_width
+#   edge = utils.to_tensor_like([w, w, h, h], bbox) - 1
+#   flip = utils.to_tensor_like([1, -1, 1, -1], bbox)
+#   crops = torch.clamp(bbox, min=0, max=edge)
+#   pads = torch.clamp((crops - bbox) * flip, min=0)
+#   for b in range(len(height_maps)):
+#     crop, pad = crops[b], pads[b]
+#     # crop image
+#     height_maps[b] = height_maps[b][:, crop[2]:crop[3], crop[0]:crop[1]]
+#     masks[b] = masks[b][:, crop[2]:crop[3], crop[0]:crop[1]]
+#     if not source.is_height_map:
+#       topdown_maps[b] = topdown_maps[b][:, crop[2]:crop[3], crop[0]:crop[1]]
+#     # pad image
+#     height_maps[b] = nn.functional(height_maps[b], pad, value=-np.inf)
+#     masks[b] = nn.functional(masks[b], pad, value=False)
+#     if not source.is_height_map:
+#       topdown_maps[b] = nn.functional(topdown_maps[b], pad, value=fill_value)
+  
 
-  Args:
-      target (TopdownMap): target top-down map that `sources` being projected to.
-      sources (List[TopdownMap]): source top-down maps to be projected.
+# def merge_topdown_maps(
+#   target: TopdownMap,
+#   *sources: List[TopdownMap],
+#   fill_value: float = None
+# ):
+#   """Merge top-down maps by reprojecting `sources` TopdownMaps to the `target`
+#   TopdownMap. Note that this method is more efficient than `fuse_topdown_maps`
+#   if the `target` TopdownMap is large, because this method does not reproject
+#   the target TopdownMap while `fuse_topdown_maps` does. Algorithm as follows:
+#   1. Find the bounding box (bbox) around the target and sources top-down maps
+#   2. Find the center of that bbox
+#   3. Crop the image with certain width and height:
+#       3a. if keep_shape is True, crop the image to target top-down map's size
+#       3b. if keep_shape is False, crop the image to bbox size
+#   4. Convert source top-down maps to point clouds in cropped top-down map's
+#       coordinates
+#   5. Treat target top-down map as the base canvas and reproject source point
+#       clouds to it
+#   Exception handling:
+#   i. sources are empty: return target top-down map
+#   ii. target are empty: apply `fuse_topdown_maps` to sources
 
-  Returns:
-      TopdownMap: merged top-down maps
-  """
-  raise NotImplementedError
+#   Args:
+#       target (TopdownMap): target top-down map that `sources` being projected to.
+#       sources (List[TopdownMap]): source top-down maps to be projected.
 
-  all_empty = all([src.is_empty for src in sources])
-  if len(sources) == 0 or all_empty:
-    return target
-  if target.is_empty:
-    return fuse_topdown_maps(
-      *sources,
-      map_projector = target.proj,
-      center_mode = CenterMode.none,
-      keep_shape = False
-    )
+#   Returns:
+#       TopdownMap: merged top-down maps
+#   """
+#   if target.is_empty:
+#     return fuse_topdown_maps(
+#       *sources,
+#       map_projector = target.proj
+#     )
+#   assert target.proj is not None
+#   assert target.proj.to_global #TODO
+#   proj = target.proj
+#   src_points, src_masks, src_values = _merge_point_clouds(
+#     *sources, map_projector=proj
+#   )
+#   if src_points is None:
+#     return target
+#   device = target.height_map.device
+#   #TODO: device
+#   src_points, src_masks = utils.validate_tensors(
+#     src_points, src_masks,
+#     same_device = device
+#   )
+#   is_height_map = (src_values == None)
+#   assert is_height_map == target.is_height_map
+#   if is_height_map:
+#     src_values = src_points[..., 1]
+#   # Compute bbox, offsets
+#   # Compute source bounding box
+#   x_coords, z_coords = proj.map_quantize(
+#     x_coords = src_points[..., 0],
+#     z_coords = src_points[..., 2]
+#   )
+#   (src_min_x, src_max_x,
+#     src_min_z, src_max_z) = _compute_bounding_box(
+#       x_coords = x_coords[src_masks],
+#       z_coords = z_coords[src_masks]
+#   )
+#   # Compute target bounding box
+#   x_coords, z_coords = utils.generate_image_coords(
+#     target.height_map.shape,
+#     dtype = torch.int64,
+#     device = device
+#   )
+#   (tar_min_x, tar_max_x,
+#     tar_min_z, tar_max_z) = _compute_bounding_box(
+#       x_coords = x_coords[target.mask],
+#       z_coords = z_coords[target.mask]
+#   )
+#   # Merge two bounding boxies
+#   pad = 1
+#   min_x = torch.minimum(src_min_x, tar_min_x) - pad
+#   max_x = torch.maximum(src_max_x, tar_max_x) + pad
+#   min_z = torch.minimum(src_min_z, tar_min_z) - pad
+#   max_z = torch.maximum(src_max_z, tar_max_z) + pad
+#   bbox = torch.stack((min_x, max_x, min_z, max_z), dim=-1)
+#   new_target = _crop_and_pad_topdown_map(
+#     target,
+#     bounding_box = bbox,
+#     fill_value = fill_value
+#   )
+#   # Crop target map
+#   proj = new_target.proj
+#   x_bin, z_bin = proj.map_quantize(
+#     x_coords = src_points[..., 0],
+#     z_coords = src_points[..., 2],
+#   )
+#   src_coords = torch.stack((z_bin, x_bin), dim=-1)
+#   canvas = new_target.topdown_map
+#   canvas_masks = new_target.mask
+#   fill_value = get(fill_value, proj.fill_value, -np.inf)
+#   topdown_map, masks, indices = proj.project(
+#     coords = src_coords,
+#     values = src_values,
+#     masks = src_masks,
+#     canvas = canvas,
+#     canvas_masks = canvas_masks,
+#     fill_value = fill_value,
+#     _validate_args = False
+#   )
+#   if is_height_map:
+#     height_map = topdown_map
+#   else:
+#     # project height map
+#     flat_indices = torch.flatten(indices, -2, -1)
+#     flat_masks = torch.flatten(masks, -2, -1)
+#     flat_height_map = _masked_gather(
+#       values = src_points[..., 1],
+#       indices = flat_indices,
+#       masks = flat_masks,
+#       fill_value = -np.inf
+#     )
+#     height_map = flat_height_map.view(topdown_map.shape)
+#     height_map = torch.maximum(height_map, new_target.height_map)
+#   # Create top-down map
+#   topdown_map = TopdownMap(
+#     topdown_map = topdown_map,
+#     mask = masks,
+#     height_map = height_map,
+#     map_projector = proj.clone(),
+#     is_height_map = is_height_map
+#   )
+#   return topdown_map
 
 class MapBuilder():
   def __init__(
@@ -2205,7 +2384,6 @@ class MapBuilder():
     cam_pose: np.ndarray = None,
     center_mode: CenterMode = CenterMode.none,
     merge: bool = True,
-    keep_shape: bool = True,
     keep_pose: bool = False,
     **kwargs
   ):
@@ -2223,7 +2401,6 @@ class MapBuilder():
         center_mode (CenterMode, optional): centering mode can be [None,
             'origin', 'camera']. Defaults to None.
         merge (bool, optional): [description]. Defaults to True.
-        keep_shape (bool, optional): [description]. Defaults to True.
         keep_pose (bool, optional): [description]. Defaults to False.
 
     Returns:
@@ -2241,9 +2418,7 @@ class MapBuilder():
     if merge:
       self.merge(
         topdown_map,
-        keep_shape = keep_shape,
-        keep_pose = keep_pose,
-        center_mode = center_mode
+        keep_pose = keep_pose
       )
     return topdown_map
 
@@ -2309,15 +2484,12 @@ class MapBuilder():
   def merge(
     self,
     topdown_map: TopdownMap,
-    keep_shape: bool = True,
     keep_pose: bool = False,
-    center_mode: CenterMode = CenterMode.none
   ):
     """Merge input top-down map to the world map
 
     Args:
         topdown_map (TopdownMap): input top-down map.
-        keep_shape (bool, optional): keep the world map's shape. Defaults to True.
         keep_pose (bool, optional): keep the world map's pose. If False,
             `topdown_map`'s pose is used. Defaults to False.
     
@@ -2333,13 +2505,18 @@ class MapBuilder():
       cam_pose = self._world_map.proj.cam_pose
     else:
       cam_pose = topdown_map.proj.cam_pose
+    # if self._world_map.proj.to_global:
+    #   # Faster merge
+    #   self._world_map = merge_topdown_maps(
+    #     self._world_map, topdown_map
+    #   )
+    #   self._world_map.proj.cam_pose = cam_pose
+    # else:
     self._world_map = fuse_topdown_maps(
       self._world_map, topdown_map,
       map_projector = self.proj.clone(
         cam_pose = cam_pose
-      ),
-      keep_shape = keep_shape,
-      center_mode = center_mode
+      )
     )
     return self._world_map
 

@@ -53,6 +53,7 @@ def create_simulator():
     trunc_depth_min = 0.15,
     trunc_depth_max = 5.05,
     clip_border = 50,
+    fill_value = -np.inf,
     to_global = True
   )
   build = dmap.MapBuilder(
@@ -122,12 +123,7 @@ def run_example():
       merge = False
     )
     # Merge local height map to world's height map
-    build.merge(
-      local_map,
-      keep_shape = False,
-      keep_pose = False,
-      center_mode = dmap.CenterMode.none
-    )
+    build.merge(local_map, keep_pose=False)
     # render scene
     scene = render_scene(rgb, depth, build.world_map, local_map, cam_pose)
     cv2.imshow('Dungeon maps', scene)

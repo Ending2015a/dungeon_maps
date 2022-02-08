@@ -221,7 +221,7 @@ def rotate(points, axis, angle, angle_eps=0.001):
   # Clamp angle if it is near to 0.0
   # torch bug: condition y must be a tensor with type float32
   zr = torch.tensor(0.0, device=device)
-  angle = torch.where(torch.abs(angle) > 0.001, angle, zr)
+  angle = torch.where(torch.abs(angle) > angle_eps, angle, zr)
   # Create rotation matrices
   R_flat = eye_flat + torch.sin(angle) * S_flat + (1-torch.cos(angle)) * S2_flat
   R = R_flat.view(-1, 3, 3) # (b, 3, 3)
@@ -456,23 +456,23 @@ def generate_crop_grid(
       torch.Tensor: crop grid (b, crop_height, crop_width, 2). torch.float32
   """
   center = to_tensor(center, device=device)
-  center = center.view(-1, 2).to(dtype=torch.int64)
+  center = center.view(-1, 2).to(dtype=torch.float32)
   batch = center.shape[0]
   h, w = image_height, image_width
   # padding left right top bottom
-  center += 1
-  h += 2
-  w += 2
+  center = center + 1
+  h = h + 2
+  w = w + 2
   x, y = generate_image_coords(
     (batch, crop_height, crop_width),
-    dtype = torch.int64,
+    dtype = torch.float32,
     device = center.device
   )
   ndims = len(x.shape)
-  center_x = (center[..., 0] - w//2).view((-1,)+(1,)*(ndims-1)) # (b, ...)
-  center_y = (center[..., 1] - h//2).view((-1,)+(1,)*(ndims-1)) # (b, ...)
-  x = (x - crop_width//2 + center_x).to(dtype=torch.float32) / (w//2)
-  y = (y - crop_height//2 + center_y).to(dtype=torch.float32) / (h//2)
+  center_x = (center[..., 0] - w/2.).view((-1,)+(1,)*(ndims-1)) # (b, ...)
+  center_y = (center[..., 1] - h/2.).view((-1,)+(1,)*(ndims-1)) # (b, ...)
+  x = (x - crop_width/2. + center_x) / (w/2.)
+  y = (y - crop_height/2. + center_y) / (h/2.)
   grid = torch.stack((x, y), dim=-1)
   return grid
 
@@ -510,7 +510,7 @@ def image_sample(
   # grid_sample restrict the image type to be same as grid
   image = image.to(dtype=grid.dtype)
   image = nn.functional.grid_sample(image, grid, mode=mode,
-      padding_mode=padding_mode, align_corners=False)
+      padding_mode=padding_mode, align_corners=True)
   image = image.to(dtype=orig_dtype)
   return image
 
