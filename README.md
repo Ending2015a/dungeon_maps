@@ -17,12 +17,12 @@ Version: `0.0.2a1`
 
 ### Orthographic projection
 
-
+#### Depth maps
 <img src="https://github.com/Ending2015a/dungeon_maps/blob/master/assets/demos_height_map.gif">
 
 [(Watch this video in high quality)](https://youtu.be/vXpTaCOoH24)
 
-Projecting depth maps to top-down maps (plan view).
+This example shows how to project depth maps to top-down maps (plan view).
 * Top left: RGB
 * Top right: Depth map
 * Bottom left: top-down maps in local space
@@ -36,12 +36,13 @@ python -m dungeon_maps.demos.height_map.run
 Control: `W`, `A`, `S`, `D`. `Q` for exit
 
 
+#### Semantic segmentations
+
 <img src="https://github.com/Ending2015a/dungeon_maps/blob/master/assets/demos_object_map.gif">
 
-[(Watch this video in height quality)][https://youtu.be/QBa3fRzOnHI]
+[(Watch this video in height quality)](https://youtu.be/QBa3fRzOnHI)
 
-
-Projecting semantic segmentation to top-down maps (plan view).
+This example shows how to project arbitrary value maps, e.g. semantic segmentation, to top-down maps (plan view).
 * Top left: RGB
 * Top center: Depth map
 * Top right: Semantic segmentation
@@ -61,7 +62,7 @@ Control: `W`, `A`, `S`, `D`. `Q` for exit
 
 [(Watch this video in high quality)](https://youtu.be/q6HnNAVr2ps)
 
-Calculating the flow fields caused by camera motion.
+This example shows how to calculate the flow fields caused by camera motion.
 
 Run this example
 ```shell
