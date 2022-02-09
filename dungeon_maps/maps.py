@@ -263,14 +263,12 @@ def orth_project(
     # use the y coordinates as value_map
     flat_value_map = flat_point_cloud[..., 1]
   else:
-  # (b, ..., h, w) -> (b, ..., h*w)
-    flat_value_map = torch.flatten(value_map, -2, 1)
+    # (b, ..., h, w) -> (b, ..., h*w)
+    flat_value_map = torch.flatten(value_map, -2, -1)
   # Projecting top-down map with orthographic projection
   coords = torch.stack((z_bin, x_bin), dim=-1)
-  canvas = torch.zeros(
-    (*coords.shape[:-2], map_height, map_width),
-    device = device
-  )
+  canvas_shape = (*flat_value_map.shape[:-1], map_height, map_width)
+  canvas = torch.zeros(canvas_shape, device=device)
   topdown_map, masks, indices = project(
     coords = coords,
     values = flat_value_map,
@@ -2148,169 +2146,6 @@ def fuse_topdown_maps(
   )
   return topdown_map
 
-# def _crop_and_pad_topdown_map(
-#   source: TopdownMap,
-#   bounding_box: torch.Tensor, # (b, 4)
-#   fill_value: float = None
-# ):
-#   height_map = utils.to_4D_image(source.height_map)
-#   height_maps = torch.split(height_map, 1)
-#   mask = utils.to_4D_image(source.mask)
-#   masks = torch.split(mask, 1)
-#   if not source.is_height_map:
-#     topdown_map = utils.to_4D_image(source.topdown_map)
-#     topdown_maps = torch.split(topdown_map, 1)
-#   else:
-#     topdown_map, topdown_maps = None, None
-#   bbox = bounding_box
-#   h, w = source.proj.map_height, source.proj.map_width
-#   edge = utils.to_tensor_like([w, w, h, h], bbox) - 1
-#   flip = utils.to_tensor_like([1, -1, 1, -1], bbox)
-#   crops = torch.clamp(bbox, min=0, max=edge)
-#   pads = torch.clamp((crops - bbox) * flip, min=0)
-#   for b in range(len(height_maps)):
-#     crop, pad = crops[b], pads[b]
-#     # crop image
-#     height_maps[b] = height_maps[b][:, crop[2]:crop[3], crop[0]:crop[1]]
-#     masks[b] = masks[b][:, crop[2]:crop[3], crop[0]:crop[1]]
-#     if not source.is_height_map:
-#       topdown_maps[b] = topdown_maps[b][:, crop[2]:crop[3], crop[0]:crop[1]]
-#     # pad image
-#     height_maps[b] = nn.functional(height_maps[b], pad, value=-np.inf)
-#     masks[b] = nn.functional(masks[b], pad, value=False)
-#     if not source.is_height_map:
-#       topdown_maps[b] = nn.functional(topdown_maps[b], pad, value=fill_value)
-  
-
-# def merge_topdown_maps(
-#   target: TopdownMap,
-#   *sources: List[TopdownMap],
-#   fill_value: float = None
-# ):
-#   """Merge top-down maps by reprojecting `sources` TopdownMaps to the `target`
-#   TopdownMap. Note that this method is more efficient than `fuse_topdown_maps`
-#   if the `target` TopdownMap is large, because this method does not reproject
-#   the target TopdownMap while `fuse_topdown_maps` does. Algorithm as follows:
-#   1. Find the bounding box (bbox) around the target and sources top-down maps
-#   2. Find the center of that bbox
-#   3. Crop the image with certain width and height:
-#       3a. if keep_shape is True, crop the image to target top-down map's size
-#       3b. if keep_shape is False, crop the image to bbox size
-#   4. Convert source top-down maps to point clouds in cropped top-down map's
-#       coordinates
-#   5. Treat target top-down map as the base canvas and reproject source point
-#       clouds to it
-#   Exception handling:
-#   i. sources are empty: return target top-down map
-#   ii. target are empty: apply `fuse_topdown_maps` to sources
-
-#   Args:
-#       target (TopdownMap): target top-down map that `sources` being projected to.
-#       sources (List[TopdownMap]): source top-down maps to be projected.
-
-#   Returns:
-#       TopdownMap: merged top-down maps
-#   """
-#   if target.is_empty:
-#     return fuse_topdown_maps(
-#       *sources,
-#       map_projector = target.proj
-#     )
-#   assert target.proj is not None
-#   assert target.proj.to_global #TODO
-#   proj = target.proj
-#   src_points, src_masks, src_values = _merge_point_clouds(
-#     *sources, map_projector=proj
-#   )
-#   if src_points is None:
-#     return target
-#   device = target.height_map.device
-#   #TODO: device
-#   src_points, src_masks = utils.validate_tensors(
-#     src_points, src_masks,
-#     same_device = device
-#   )
-#   is_height_map = (src_values == None)
-#   assert is_height_map == target.is_height_map
-#   if is_height_map:
-#     src_values = src_points[..., 1]
-#   # Compute bbox, offsets
-#   # Compute source bounding box
-#   x_coords, z_coords = proj.map_quantize(
-#     x_coords = src_points[..., 0],
-#     z_coords = src_points[..., 2]
-#   )
-#   (src_min_x, src_max_x,
-#     src_min_z, src_max_z) = _compute_bounding_box(
-#       x_coords = x_coords[src_masks],
-#       z_coords = z_coords[src_masks]
-#   )
-#   # Compute target bounding box
-#   x_coords, z_coords = utils.generate_image_coords(
-#     target.height_map.shape,
-#     dtype = torch.int64,
-#     device = device
-#   )
-#   (tar_min_x, tar_max_x,
-#     tar_min_z, tar_max_z) = _compute_bounding_box(
-#       x_coords = x_coords[target.mask],
-#       z_coords = z_coords[target.mask]
-#   )
-#   # Merge two bounding boxies
-#   pad = 1
-#   min_x = torch.minimum(src_min_x, tar_min_x) - pad
-#   max_x = torch.maximum(src_max_x, tar_max_x) + pad
-#   min_z = torch.minimum(src_min_z, tar_min_z) - pad
-#   max_z = torch.maximum(src_max_z, tar_max_z) + pad
-#   bbox = torch.stack((min_x, max_x, min_z, max_z), dim=-1)
-#   new_target = _crop_and_pad_topdown_map(
-#     target,
-#     bounding_box = bbox,
-#     fill_value = fill_value
-#   )
-#   # Crop target map
-#   proj = new_target.proj
-#   x_bin, z_bin = proj.map_quantize(
-#     x_coords = src_points[..., 0],
-#     z_coords = src_points[..., 2],
-#   )
-#   src_coords = torch.stack((z_bin, x_bin), dim=-1)
-#   canvas = new_target.topdown_map
-#   canvas_masks = new_target.mask
-#   fill_value = get(fill_value, proj.fill_value, -np.inf)
-#   topdown_map, masks, indices = proj.project(
-#     coords = src_coords,
-#     values = src_values,
-#     masks = src_masks,
-#     canvas = canvas,
-#     canvas_masks = canvas_masks,
-#     fill_value = fill_value,
-#     _validate_args = False
-#   )
-#   if is_height_map:
-#     height_map = topdown_map
-#   else:
-#     # project height map
-#     flat_indices = torch.flatten(indices, -2, -1)
-#     flat_masks = torch.flatten(masks, -2, -1)
-#     flat_height_map = _masked_gather(
-#       values = src_points[..., 1],
-#       indices = flat_indices,
-#       masks = flat_masks,
-#       fill_value = -np.inf
-#     )
-#     height_map = flat_height_map.view(topdown_map.shape)
-#     height_map = torch.maximum(height_map, new_target.height_map)
-#   # Create top-down map
-#   topdown_map = TopdownMap(
-#     topdown_map = topdown_map,
-#     mask = masks,
-#     height_map = height_map,
-#     map_projector = proj.clone(),
-#     is_height_map = is_height_map
-#   )
-#   return topdown_map
-
 class MapBuilder():
   def __init__(
     self,
@@ -2505,13 +2340,6 @@ class MapBuilder():
       cam_pose = self._world_map.proj.cam_pose
     else:
       cam_pose = topdown_map.proj.cam_pose
-    # if self._world_map.proj.to_global:
-    #   # Faster merge
-    #   self._world_map = merge_topdown_maps(
-    #     self._world_map, topdown_map
-    #   )
-    #   self._world_map.proj.cam_pose = cam_pose
-    # else:
     self._world_map = fuse_topdown_maps(
       self._world_map, topdown_map,
       map_projector = self.proj.clone(

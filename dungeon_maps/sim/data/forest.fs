@@ -151,7 +151,7 @@ Object sdPlane(vec3 p, vec3 n, float h, float id)
     return Object(dot(p, n) + h, id);
 }
 
-Object sdRoadsides(vec3 p)
+Object sdForest(vec3 p)
 {
     p /= MAZE_SCALE;
     vec2 t = floor(p.xz);
@@ -178,7 +178,7 @@ Object sdRoadsides(vec3 p)
 Object map(vec3 p)
 {
     Object obj = Object(FAR, 0.0);
-    obj = opUnion(obj, sdRoadsides(p));
+    obj = opUnion(obj, sdForest(p));
     obj = opUnion(obj, sdPlane(p, vec3(0., 1., 0.), 0., FLOOR));
     return obj;
 }
