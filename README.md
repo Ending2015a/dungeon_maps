@@ -1,7 +1,7 @@
 # Dungeon Maps
 A tiny PyTorch library for depth map manipulations.
 
-Version: `0.0.2a0`
+Version: `0.0.2a1`
 
 ## Features
 
@@ -22,8 +22,7 @@ Version: `0.0.2a0`
 
 [(Watch this video in high quality)](https://youtu.be/vXpTaCOoH24)
 
-
-Projecting top-down maps (plan view) from depth maps.
+Projecting depth maps to top-down maps (plan view).
 * Top left: RGB
 * Top right: Depth map
 * Bottom left: top-down maps in local space
@@ -35,6 +34,26 @@ Run this example
 python -m dungeon_maps.demos.height_map.run
 ```
 Control: `W`, `A`, `S`, `D`. `Q` for exit
+
+
+<img src="https://github.com/Ending2015a/dungeon_maps/blob/master/assets/demos_object_map.gif">
+
+[(Watch this video in height quality)][https://youtu.be/QBa3fRzOnHI]
+
+
+Projecting semantic segmentation to top-down maps (plan view).
+* Top left: RGB
+* Top center: Depth map
+* Top right: Semantic segmentation
+* Bottom left: top-down maps in local space
+* Bottom right: top-down maps in global space
+
+Run this example
+```shell
+python -m dungeon_maps.demos.object_map.run
+```
+Control: `W`, `A`, `S`, `D`. `Q` for exit
+
 
 ### Egocentric motion flow
 
