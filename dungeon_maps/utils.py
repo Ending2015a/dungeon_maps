@@ -116,15 +116,17 @@ def validate_tensors(*args, same_device=None, same_dtype=None, keep_tuple=False)
   # Convert the first args to torch.tensor
   first_tensor = to_tensor(args[0])
   # Get device from the first tensor
-  if same_device is True:
-    same_device = first_tensor.device
-  else:
-    same_device = None
+  if isinstance(same_device, bool):
+    if same_device:
+      same_device = first_tensor.device
+    else:
+      same_device = None
   # Get dtype from the first tensor
-  if same_dtype is True:
-    same_dtype = first_tensor.dtype
-  else:
-    same_dtype = None
+  if isinstance(same_dtype, bool):
+    if same_dtype:
+      same_dtype = first_tensor.device
+    else:
+      same_dtype = None
   tensors = []
   for arg in args:
     tensors.append(
