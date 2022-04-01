@@ -1,5 +1,14 @@
 # --- built in ---
-from typing import Any
+import enum
+from dataclasses import dataclass
+from typing import (
+  Any,
+  Callable,
+  Dict,
+  Tuple,
+  Union,
+  Optional
+)
 # --- 3rd party ---
 import numpy as np
 import torch
@@ -10,7 +19,9 @@ import torch_scatter
 # ======== Utils =========
 
 __all__ = [
-  'StateObject',
+  'NINF',
+  'Reduction',
+  'CameraIntrinsics',
   'get_camera_intrinsics',
   # --- PyTorch utils ----
   'to_numpy',
@@ -21,7 +32,7 @@ __all__ = [
   'translate',
   'rotate',
   'ravel_index',
-  'scatter_max',
+  'scatter_tensor',
   # --- Image utils ----
   'to_4D_image',
   'from_4D_image',
@@ -30,30 +41,93 @@ __all__ = [
   'image_sample'
 ]
 
-class StateObject(dict):
-  def __new__(cls, *args, **kwargs):
-    self = super().__new__(cls, *args, **kwargs)
-    self.__dict__ = self
-    return self
+# === CONSTANTS ===
 
-def get_camera_intrinsics(width, height, hfov, vfov=None):
-  """Return camera's intrinsic parameters"""
+NINF = -np.inf
+ANGLE_EPS = 0.001
+
+# === TYPING ===
+Float3D = Tuple[float, float, float]
+
+@enum.unique
+class Reduction(str, enum.Enum):
+  max = 'max'
+  min = 'min'
+  sum = 'sum'
+  mean = 'mean'
+  prod = 'prod'
+
+  @classmethod
+  def _missing_(cls, value):
+    """In default we use Reduction.max
+    for example:
+      assert Reduction(None) == Reduction.max
+    """
+    if value is None:
+      return cls.max
+
+# Reduction/scatter mapping
+_ScatterMethods: Dict[Reduction, Callable] = {
+  Reduction.max: torch_scatter.scatter_max,
+  Reduction.min: torch_scatter.scatter_min,
+  Reduction.sum: torch_scatter.scatter_add,
+  Reduction.mean: torch_scatter.scatter_mean,
+  Reduction.prod: torch_scatter.scatter_mul
+}
+
+
+@dataclass
+class CameraIntrinsics:
+  """Camera intrinsic parameters
+  
+  Properties:
+    cx: principle point a.k.a. optical center
+    cy: principle point a.k.a. optical center
+    fx: focal length
+    fy: focal length
+  """
+  cx: float
+  cy: float
+  fx: float
+  fy: float
+
+def get_camera_intrinsics(
+  width: float,
+  height: float,
+  hfov: float,
+  vfov: Optional[float] = None
+) -> CameraIntrinsics:
+  """Return camera's intrinsic parameters
+  
+  Args:
+    width (float): image width (px)
+    height (float): image height (px)
+    hfov (float): horizontal field of view (rad)
+    vfov (float, optional): vertical field of view (red). Automaically
+      inferred from `hfov` if set this to None.
+
+  Returns:
+    CameraIntrinsics: camera intrnsic parameters
+  """
   cx = width / 2.
   cy = height / 2.
   fx = cx / np.tan(hfov / 2.)
   fy = cy / np.tan(vfov / 2.) if vfov is not None else fx
-  return StateObject(cx=cx, cy=cy, fx=fx, fy=fy)
+  return CameraIntrinsics(cx=cx, cy=cy, fx=fx, fy=fy)
 
 # ======== PyTorch utils =======
-def to_numpy(inputs, dtype=None):
+def to_numpy(
+  inputs: Any,
+  dtype: Optional[np.dtype] = None
+) -> np.ndarray:
   """Convert inputs to numpy array
 
   Args:
-      inputs (Any): input tensor
-      dtype (np.dtype, optional): numpy data type. Defaults to None.
-  
+    inputs (Any): input tensor
+    dtype (np.dtype, optional): numpy data type. Defaults to None.
+
   Returns:
-     np.ndarray: numpy array
+    np.ndarray: numpy array
   """
   if torch.is_tensor(inputs):
     t = inputs.detach().cpu().numpy()
@@ -62,17 +136,22 @@ def to_numpy(inputs, dtype=None):
   dtype = dtype or t.dtype
   return t.astype(dtype=dtype)
 
-def to_tensor(inputs, dtype=None, device=None, **kwargs):
+def to_tensor(
+  inputs: Any,
+  dtype: Optional[torch.dtype] = None,
+  device: Optional[torch.device] = None,
+  **kwargs
+) -> torch.Tensor:
   """Convert `inputs` to torch.Tensor with the specified `dtype`
   and place on the specified `device`
 
   Args:
-      inputs (Any): input tensor.
-      dtype (torch.dtype, optional): data type. Defaults to None.
-      device (torch.device, optional): device. Defaults to None.
+    inputs (Any): input tensor.
+    dtype (torch.dtype, optional): data type. Defaults to None.
+    device (torch.device, optional): device. Defaults to None.
 
   Returns:
-      torch.Tensor: tensor
+    torch.Tensor: tensor
   """
   if torch.is_tensor(inputs):
     t = inputs
@@ -82,34 +161,45 @@ def to_tensor(inputs, dtype=None, device=None, **kwargs):
     t = torch.tensor(inputs, dtype=dtype)
   return t.to(device=device, dtype=dtype, **kwargs)
 
-def to_tensor_like(inputs, tensor):
+def to_tensor_like(
+  inputs: Any,
+  tensor: torch.Tensor
+) -> torch.Tensor:
   """Convert `inputs` to torch.Tensor with the same dtype and
   device as `tensor`
 
   Args:
-      inputs (Any): input tensor.
-      tensor (torch.Tensor): target tensor.
+    inputs (Any): input tensor.
+    tensor (torch.Tensor): target tensor.
   
   Returns:
-      torch.Tensor: tensor.
+    torch.Tensor: tensor.
   """
   assert torch.is_tensor(tensor), \
       f"`tensor` must be a torch.Tensor, got {type(tensor)}"
   return to_tensor(inputs, dtype=tensor.dtype, device=tensor.device)
 
-def validate_tensors(*args, same_device=None, same_dtype=None, keep_tuple=False):
+def validate_tensors(
+  *args: Any,
+  same_device: Optional[Union[bool, torch.device]] = None,
+  same_dtype: Optional[Union[bool, torch.dtype]] = None,
+  keep_tuple: bool = False
+) -> Union[Tuple[torch.Tensor, ...], torch.Tensor]:
   """Validate tensors, convert all args into torch.tensor
 
   Args:
-      same_device (bool, torch.device, optional): device that all tensors being
-          placed on. If it is True, all the tensors are placed on the same
-          device as the first torch.tensor. Defaults to None.
-      same_dtype (bool, torch.dtype, optional): tensor types. If it is True,
-          all the tensors are converted to the same data type as the first
-          torch.tensor. Defaults to None.
-    
+    same_device (bool, torch.device, optional): device that all tensors being
+      placed on. If it is True, all the tensors are placed on the same
+      device as the first torch.tensor. Defaults to None.
+    same_dtype (bool, torch.dtype, optional): tensor types. If it is True,
+      all the tensors are converted to the same data type as the first
+      torch.tensor. Defaults to None.
+    keep_tuple (bool, optional): if False, the returns are automatically
+      unpacked when only one `args` is provided. Otherwise, return a tuple.
+
   Returns:
-      list of validated tensors
+    Union[Tuple[torch.Tensor], torch.tensor]: tuple of tensors or a tensor if
+      only one `args` is provided and `keep_tuple` is set to False.
   """
   if len(args) == 0:
     return
@@ -136,20 +226,23 @@ def validate_tensors(*args, same_device=None, same_dtype=None, keep_tuple=False)
     return tensors[0]
   return tuple(tensors)
 
-def translate(points, offsets):
+def translate(
+  points: torch.Tensor,
+  offsets: torch.Tensor
+) -> torch.Tensor:
   """Translating 3D points (move along XYZ)
 
   Note that the coordinate system follows the rule
-      X: right
-      Y: up
-      Z: forward
+    X: right
+    Y: up
+    Z: forward
 
   Args:
-      points (torch.Tensor): points to translate, shape (b, ..., 3). torch.float32
-      offsets (torch.Tensor): XYZ offsets (b, 3). torch.float32
+    points (torch.Tensor): points to translate, shape (b, ..., 3). torch.float32
+    offsets (torch.Tensor): XYZ offsets (b, 3). torch.float32
   
   Returns:
-      torch.Tensor: translated points
+    torch.Tensor: translated points
   """
   points, offsets = validate_tensors(
     points, offsets,
@@ -165,34 +258,39 @@ def translate(points, offsets):
   )
   return points
 
-def rotate(points, axis, angle, angle_eps=0.001):
+def rotate(
+  points: torch.Tensor,
+  axis: torch.Tensor,
+  angle: torch.Tensor,
+  angle_eps: float = ANGLE_EPS
+) -> torch.Tensor:
   """Rotating 3D points along `axis` with Rodringues' Rotation formula:
-      R = I + S * sin(angle) + S^2 * (1-cos(angle))
+    R = I + S * sin(angle) + S^2 * (1-cos(angle))
   where
-      R: rotation metrics
-      S: [
-              0, -axis_x,  axis_y,
-         axis_z,       0, -axis_x,
-        -axis_y,  axis_z,       0
-      ]
-      S^2: matmul(S, S)
+    R: rotation metrics
+    S: [
+            0, -axis_x,  axis_y,
+       axis_z,       0, -axis_x,
+      -axis_y,  axis_z,       0
+    ]
+    S^2: matmul(S, S)
   
   Note that the coordinate system follows the rule
-      X: right
-      Y: up
-      Z: forward
+    X: right
+    Y: up
+    Z: forward
 
   Args:
-      points (torch.Tensor): points to rotate, in shape (b, ..., 3). torch.float32
-      axis (torch.Tensor): axis the points rotated along, in shape (b, 3).
-          torch.float32
-      angle (torch.Tensor): rotated angle in radian with shape (b,) or (b, 1).
-          torch.float32
-      angle_eps (float, optional): angle precision. `abs(angle)` smaller than this
-          value is clamped to zero. Defaults to 0.001.
+    points (torch.Tensor): points to rotate, in shape (b, ..., 3). torch.float32
+    axis (torch.Tensor): axis the points rotated along, in shape (b, 3).
+      torch.float32
+    angle (torch.Tensor): rotated angle in radian with shape (b,) or (b, 1).
+      torch.float32
+    angle_eps (float, optional): angle precision. `abs(angle)` smaller than this
+      value is clamped to zero. Defaults to 0.001.
 
   Returns:
-      torch.tensor: rotated points
+    torch.tensor: rotated points
   """
   points, axis, angle = validate_tensors(
     points, axis, angle,
@@ -231,7 +329,11 @@ def rotate(points, axis, angle, angle_eps=0.001):
   points = torch.einsum('bji,b...j->b...i', R, points)
   return points
 
-def ravel_index(index, shape, keepdim=False):
+def ravel_index(
+  index: torch.Tensor,
+  shape: torch.Size,
+  keepdim: bool = False
+) -> torch.Tensor:
   """Ravel multi-dimensional indices to 1D index
   similar to np.ravel_multi_index
 
@@ -249,14 +351,14 @@ def ravel_index(index, shape, keepdim=False):
   ```
 
   Args:
-      index (torch.Tensor): indices in reversed order dn, ..., d1,
-          with shape (..., n). torch.int64
-      shape (tuple): shape of each dimension dn, ..., d1
-      keepdim (bool, optional): keep dimensions. Defaults to False.
+    index (torch.Tensor): indices in reversed order dn, ..., d1,
+      with shape (..., n). torch.int64
+    shape (torch.Size): shape of each dimension dn, ..., d1
+    keepdim (bool, optional): keep dimensions. Defaults to False.
 
   Returns:
-      torch.tensor: Raveled indices in shape (...,), if `keepdim` is False,
-          otherwise in shape (..., 1).
+    torch.Tensor: Raveled indices in shape (...,), if `keepdim` is False,
+      otherwise in shape (..., 1).
   """
   index, shape = validate_tensors(
     index, (1,)+shape[::-1], # [1, d1, ..., dn]
@@ -267,14 +369,32 @@ def ravel_index(index, shape, keepdim=False):
   index = (index * shape).sum(dim=-1, keepdim=keepdim) # (..., 1) or (...,)
   return index
 
-def scatter_max(
+def _get_scatter_method(
+  reduction: Union[str, Reduction]
+) -> Callable:
+  """Get scatter method by reduction type. Note that
+  if reduction is set to None, Reduction.max is used in default.
+
+  Args:
+    reduction (Union[str, Reduction]): reduction enum.
+
+  Returns:
+    Callable: corresponding scatter method
+  """
+  reduction = Reduction(reduction)
+  if reduction not in _ScatterMethods:
+    raise ValueError(f"Invalid reduction method: {reduction}")
+  return _ScatterMethods[reduction]
+
+def scatter_tensor(
   canvas: torch.Tensor,
   indices: torch.Tensor,
   values: torch.Tensor,
-  masks: torch.Tensor = None,
-  fill_value: float = None,
+  masks: Optional[torch.Tensor] = None,
+  fill_value: Optional[float] = None,
+  reduction: Optional[Union[str, Reduction]] = None,
   _validate_args: bool = True
-):
+) -> Tuple[torch.Tensor, torch.Tensor]:
   """Scattering values over an `n`-dimensional canvas
 
   In the case of projecting values to an image-type canvas (`n`=2), i.e. projecting
@@ -288,20 +408,21 @@ def scatter_max(
   (b..., d1, ..., dn), it stores [d1, ..., dn].
 
   Args:
-      canvas (torch.Tensor): canvas in shape (b..., d1, ..., dn). torch.float32
-      indices (torch.Tensor): [d1, ..., dn] coordinates in shape (b..., N, n).
-          torch.float32
-      values (torch.Tensor): values to scatter in shape (b..., N). torch.float32
-      masks (torch.Tensor, optional): boolean masks. True for valid values,
-          False for invalid values. shape (b..., N). torch.bool. Defaults to None.
-      fill_value (float, optional): default values to fill in with. Defaults
-          to None.
+    canvas (torch.Tensor): canvas in shape (b..., d1, ..., dn). torch.float32
+    indices (torch.Tensor): [d1, ..., dn] coordinates in shape (b..., N, n).
+      torch.float32
+    values (torch.Tensor): values to scatter in shape (b..., N). torch.float32
+    masks (torch.Tensor, optional): boolean masks. True for valid values,
+      False for invalid values. shape (b..., N). torch.bool. Defaults to None.
+    fill_value (float, optional): default values to fill in with. Defaults
+      to None.
+    reduction (Union[str, Reduction], optional): method to reduce the values
+      scattered into the same cells. Defaults to Reduction.max.
 
   Returns:
-      torch.Tensor: resuling canvas, (b..., d1, ..., dn). torch.float32
-      torch.Tensor: indices of scattered points, (b..., d1, ..., dn).
-          -1 for invalid scattering (see torch_scatter.scatter_max).
-          torch.int64.
+    torch.Tensor: resuling canvas, (b..., d1, ..., dn). torch.float32
+    torch.Tensor: binary masks. False for unchanged values, True for changed
+      values. shape (b..., d1, ..., dn) torch.bool
   """
   if _validate_args:
     # Create default masks
@@ -345,31 +466,42 @@ def scatter_max(
   # (b..., 1 + d1*...*dn)
   flat_canvas = torch.cat((dummy_channel, flat_canvas), dim=-1)
   flat_indices = flat_indices + dummy_shift
-  # Initialize canvas with -np.inf if `fill_value` is provided
+  # Get reduction method
+  reduction = Reduction(reduction)
+  scatter_method = _get_scatter_method(reduction)
   if fill_value is not None:
     flat_canvas.fill_(fill_value)
-  _, flat_indices = torch_scatter.scatter_max(
+  flat_canvas_copy = flat_canvas.clone()
+  scatter_method(
     flat_values, flat_indices, dim=-1, out=flat_canvas
   )
-  # Slice out dummy channel
-  flat_canvas = flat_canvas[..., 1:] # (b..., d1*...*dn)
-  canvas = flat_canvas.view(canvas.shape) # (b..., dn, ..., d1)
-  flat_indices = flat_indices[..., 1:] # (b..., d1*...*dn)
-  indices = flat_indices.view(canvas.shape) # (b..., dn, ..., d1)
-  indices = torch.where(indices < N, indices, -1)
-  return canvas, indices
+  # slice off dummy channel
+  flat_canvas = flat_canvas[..., 1:]
+  canvas = flat_canvas.view(canvas.shape)
+  flat_canvas_copy = flat_canvas_copy[..., 1:]
+  canvas_copy = flat_canvas_copy.view(canvas.shape)
+  # here we use subtraction to detect whether the canvas values are
+  # changed after scattering.
+  # note that if `fill_value` is set to inf or -inf. It has the following
+  # rules, where x denotes an arbitrary floating value:
+  #   inf - inf = nan  => non-changed
+  #   inf - x = inf    => changed
+  masks = torch.abs(canvas - canvas_copy)
+  masks = torch.nan_to_num(masks, nan=0.0, posinf=1.0, neginf=1.0)
+  masks = ~(masks == 0.0).to(dtype=torch.bool)
+  return canvas, masks
 
-def to_4D_image(image):
+def to_4D_image(image: torch.Tensor) -> torch.Tensor:
   """Convert `image` to 4D tensors (b, c, h, w)
 
   Args:
-      image (torch.Tensor): 2/3/4D image tensor
-          2D: (h, w)
-          3D: (c, h, w)
-          4D: (b, c, h, w)
+    image (torch.Tensor): 2/3/4D image tensor
+      2D: (h, w)
+      3D: (c, h, w)
+      4D: (b, c, h, w)
   
   Returns:
-      torch.Tensor: 4D image tensor
+    torch.Tensor: 4D image tensor
   """
   ndims = len(image.shape)
   assert ndims in [2, 3, 4], \
@@ -381,15 +513,15 @@ def to_4D_image(image):
   else:
     return image
 
-def from_4D_image(image, ndims):
+def from_4D_image(image: torch.Tensor, ndims: int) -> torch.Tensor:
   """Convert `image` to `ndims`-D tensors
 
   Args:
-      image (torch.Tensor): 4D image tensors in shape (b, c, h, w).
-      ndims (int): the original rank of the image.
+    image (torch.Tensor): 4D image tensors in shape (b, c, h, w).
+    ndims (int): the original rank of the image.
 
   Returns:
-      torch.Tensor: `ndims`-D tensors
+    torch.Tensor: `ndims`-D tensors
   """
   _ndims = len(image.shape)
   assert _ndims == 4, f"`image` must be a 4D tensor, while {_ndims}-D are given."
@@ -402,22 +534,22 @@ def from_4D_image(image, ndims):
 
 def generate_image_coords(
   image_shape: torch.Size,
-  dtype: torch.dtype = None,
-  device: torch.device = None,
-):
+  dtype: Optional[torch.dtype] = None,
+  device: Optional[torch.device] = None,
+) -> Tuple[torch.Tensor, torch.Tensor]:
   """Generate image horizontal, vertical coordinates
 
   Args:
-      image_shape (torch.Size): shape of image. Expected 2/3/4D or higher
-      dimensions, where the last two dimensions are (h, w).
-      flip_h (bool, optional): whether to flip horizontal axis. Defaults to True.
-      dtype (torch.dtype, optional): data type, defaults to torch.float32.
-          Defaults to None.
-      device (torch.device, optional): torch device. Defaults to None.
+    image_shape (torch.Size): shape of image. Expected 2/3/4D or higher
+    dimensions, where the last two dimensions are (h, w).
+    flip_h (bool, optional): whether to flip horizontal axis. Defaults to True.
+    dtype (torch.dtype, optional): data type, defaults to torch.float32.
+      Defaults to None.
+    device (torch.device, optional): torch device. Defaults to None.
 
   Returns:
-      torch.tensor: horizontal coordinates in `image_shape`.
-      torhc.tensor: vertical coordinates in `image_shape`.
+    torch.tensor: horizontal coordinates in `image_shape`.
+    torhc.tensor: vertical coordinates in `image_shape`.
   """
   dtype = dtype or torch.float32
   ndims = len(image_shape)
@@ -442,20 +574,20 @@ def generate_crop_grid(
   image_height: int,
   crop_width: int,
   crop_height: int,
-  device: torch.device = None
-):
+  device: Optional[torch.device] = None
+) -> torch.Tensor:
   """Generate affine grid for cropping.
 
   Args:
-      center (torch.Tensor): cropping center coordinates (b, 2)
-      image_width (int): image width.
-      image_height (int): image height.
-      crop_width (int): width to crop.
-      crop_height (int): height to crop.
-      device (torch.device, optional): torch device. Defaults to None.
+    center (torch.Tensor): cropping center coordinates (b, 2)
+    image_width (int): image width.
+    image_height (int): image height.
+    crop_width (int): width to crop.
+    crop_height (int): height to crop.
+    device (torch.device, optional): torch device. Defaults to None.
 
   Returns:
-      torch.Tensor: crop grid (b, crop_height, crop_width, 2). torch.float32
+    torch.Tensor: crop grid (b, crop_height, crop_width, 2). torch.float32
   """
   center = to_tensor(center, device=device)
   center = center.view(-1, 2).to(dtype=torch.float32)
@@ -481,21 +613,24 @@ def generate_crop_grid(
 def image_sample(
   image: torch.Tensor,
   grid: torch.Tensor,
-  fill_value: Any = None,
+  fill_value: Optional[float] = None,
   mode: str = 'nearest',
   _validate_args: bool = True
-):
+) -> torch.Tensor:
   """Sample image by affine grid
 
   Args:
-      image (torch.Tensor): image tensor (b, c, h, w). torch.float32
-      grid (torch.Tensor): affine grid (b, mh, mw, 2), usually generated from
-          `generate_crop_grid`. torch.float32
-      fill_value (Any, optional): default values to fill in. Defaults to None.
-      mode (str, optional): sampling method. Defaults to 'nearest'.
+    image (torch.Tensor): image tensor (b, c, h, w). torch.float32
+    grid (torch.Tensor): affine grid (b, mh, mw, 2), usually generated from
+      `generate_crop_grid`. torch.float32
+    fill_value (Any, optional): default values to fill in. Defaults to None.
+    mode (str, optional): sampling method can be either 'nearest', 'bilinear'
+      or 'bicubic'. See [1]. Defaults to 'nearest'.
+
+  [1] https://pytorch.org/docs/stable/generated/torch.nn.functional.grid_sample.html
 
   Returns:
-      torch.Tensor: sampled image tensor (b, c, mh, mw), torch.float32.
+    torch.Tensor: sampled image tensor (b, c, mh, mw), torch.float32.
   """
   if _validate_args:
     image, grid = validate_tensors(image, grid, same_device=True)
@@ -529,15 +664,15 @@ def gather_nd(
   see: https://discuss.pytorch.org/t/how-to-do-the-tf-gather-nd-in-pytorch/6445/36
 
   Args:
-      params (torch.Tensor): shape (b..., d1, ..., dn), where `b...` is arbitrary
-          number of batch dimensions. `d1`~`dn` is the `n` data dimensions.
-      indices (np.ndarray): stores the indices of data to pick. shape (b..., m),
-          where `m` is the rank of data dimensions to pick, m <= n. np.int64
-      batch_dims (int, optional): number of leading batch dimensions of `params`,
-          i.e. len(b...). Defaults to 0.
+    params (torch.Tensor): shape (b..., d1, ..., dn), where `b...` is arbitrary
+      number of batch dimensions. `d1`~`dn` is the `n` data dimensions.
+    indices (np.ndarray): stores the indices of data to pick. shape (b..., m),
+      where `m` is the rank of data dimensions to pick, m <= n. np.int64
+    batch_dims (int, optional): number of leading batch dimensions of `params`,
+      i.e. len(b...). Defaults to 0.
 
   Returns:
-      torch.Tensor: shape (b..., d(n-m), ..., dn)
+    torch.Tensor: shape (b..., d(n-m), ..., dn)
   """
   if _validate_args:
     params = validate_tensors(params, same_device=True)
@@ -594,13 +729,13 @@ def remap(
   """Re-sample image tensors
 
   Args:
-      image (torch.Tensor): 2/3/4D image tensoes to re-sample. shape (b, c, h, w).
-      grid (torch.Tensor): affine grid (b, h, w, 2). torch.float32
-      method (str, optional): sampling method. Must be one of ['bilinear',
+    image (torch.Tensor): 2/3/4D image tensoes to re-sample. shape (b, c, h, w).
+    grid (torch.Tensor): affine grid (b, h, w, 2). torch.float32
+    method (str, optional): sampling method. Must be one of ['bilinear',
       'nearest']. Defaults to 'bilinear'.
 
   Returns:
-      torch.Tensor: Re-sampled image tensors.
+    torch.Tensor: Re-sampled image tensors.
   """
   if _validate_args:
     (image, grid) = validate_tensors(image, grid, same_device=True)

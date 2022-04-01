@@ -1,7 +1,7 @@
 # Dungeon Maps
 A tiny PyTorch library for depth map manipulations.
 
-Version: `0.0.2a2`
+Version: `0.0.3a0`
 
 ## Features
 

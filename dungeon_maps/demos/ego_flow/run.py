@@ -67,6 +67,7 @@ def create_simulator():
     trunc_depth_min = 0.15,
     trunc_depth_max = 5.05,
     clip_border = 50,
+    fill_value = dmap.NINF,
     to_global = True
   )
   return env, proj
@@ -75,7 +76,7 @@ def compute_ego_flow(proj, depth, trans_pose):
   # Compute egocentric motion flow
   depth_map = np.transpose(denormalize(depth), (2, 0, 1)) # (1, h, w)
   depth_map = torch.tensor(depth_map, device='cuda')
-  grid = proj.camera_affine_grid(depth_map, -trans_pose)
+  grid = proj.camera_affine_grid(depth_map, trans_pose)
   x, y = dmap.utils.generate_image_coords(
     depth_map.shape,
     dtype = torch.float32,

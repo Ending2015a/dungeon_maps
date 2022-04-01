@@ -37,17 +37,17 @@ def draw_categorical_map(topdown_map, mask):
       mask (torch.Tensor, np.ndarray): mask (b, 1, h, w).
   """
   topdown_map = dmap.utils.to_numpy(topdown_map[0]) # (c, h, w)
-  mask = dmap.utils.to_numpy(mask[0, 0]) # (h, w)
+  mask = dmap.utils.to_numpy(mask[0]) # (c, h, w)
   c, h, w = topdown_map.shape
   cate_map = np.full(
     (h, w, 3), fill_value=255, dtype=np.uint8
   )
   class_threshold = 0.5
-  invalid_area = ~mask
+  invalid_area = ~np.any(mask, axis=0)
   cate_map[invalid_area] = CLASS_COLORS[0]
   for n in range(c):
     class_map = topdown_map[n] # (h, w)
-    class_area = (class_map > class_threshold) & mask
+    class_area = (class_map > class_threshold) & mask[n]
     cate_map[class_area] = CLASS_COLORS[n]
   return cate_map
 

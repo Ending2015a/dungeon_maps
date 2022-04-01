@@ -7,7 +7,7 @@ import dungeon_maps as dmap
 
 def draw_flow(flow):
   flow_scale = 0.2
-  ang = torch.atan2(flow[..., 1], flow[..., 0])
+  ang = torch.atan2(-flow[..., 1], -flow[..., 0])
   hue = ang / (math.pi * 2.0) + 0.5
   value = torch.norm(flow, dim=-1) * flow_scale
   # Coloring flow
