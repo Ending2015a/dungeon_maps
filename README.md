@@ -69,6 +69,13 @@ Run this example
 python -m dungeon_maps.demos.ego_flow.run
 ```
 
+### Use case
+
+<img src="https://github.com/Ending2015a/dungeon_maps/blob/master/assets/demo_habitat_challenge.gif">
+
+One of the real case is to use this package along with the [Habitat Lab](https://github.com/facebookresearch/habitat-lab) to render the semantic topdown maps.
+
+
 ## Installation
 
 Basic requirements:
