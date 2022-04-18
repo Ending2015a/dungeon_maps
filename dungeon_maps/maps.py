@@ -2214,6 +2214,15 @@ def fuse_topdown_maps(
   is_height_map = (values == None)
   if is_height_map:
     values = points[..., 1]
+  if np.prod(points[masks].shape) == 0:
+    # TODO: return arbitrary non-empty map
+    _map = maps[-1]
+    return TopdownMap(
+      topdown_map = _map.topdown_map,
+      mask = _map.mask,
+      height_map = _map.height_map,
+      map_projector = proj
+    )
   # Compute new shape and offsets
   (map_width, map_height, width_offset, height_offset) = \
       _compute_new_shape_and_offsets(

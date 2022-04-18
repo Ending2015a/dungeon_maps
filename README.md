@@ -1,7 +1,7 @@
 # Dungeon Maps
 A tiny PyTorch library for depth map manipulations.
 
-Version: `0.0.3a0`
+Version: `0.0.3a1`
 
 ## Features
 
@@ -11,7 +11,7 @@ Version: `0.0.3a0`
 | Egocentric motion flow |:heavy_check_mark:|:heavy_check_mark:|:heavy_check_mark:|
 | 3D affine transformation<br>(Camera space) |:heavy_check_mark:|:heavy_check_mark:|:heavy_check_mark:|
 | 2D affine transformation<br>(Top-down view) |:heavy_check_mark:|:heavy_check_mark:|:heavy_check_mark:|
-| Map builder |:heavy_check_mark:|:heavy_check_mark:|:heavy_minus_sign:|
+| Map builder |:heavy_check_mark:|:heavy_check_mark:|:heavy_check_mark:|
 
 ## Demos
 
