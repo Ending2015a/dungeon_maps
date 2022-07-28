@@ -1,5 +1,5 @@
 # Dungeon Maps
-*Dungeon Maps* is a powerful, lightweight PyTorch library for depth map manipulations, which is originally developed as a 2D mapping system for solving navigation problems: It can produce accurate 2D top-down views from the depth map observations. See this [Habitat](https://github.com/facebookresearch/habitat-lab) object-goal navigation example:
+*Dungeon Maps* is a powerful, lightweight PyTorch library for depth map manipulations, which is originally developed as a 2D mapping system for solving navigation problems: it can produce accurate 2D semantic top-down views from the depth map observations along with semantic segmentation predictions. See this [Habitat](https://github.com/facebookresearch/habitat-lab) object-goal navigation example:
 
 
 
