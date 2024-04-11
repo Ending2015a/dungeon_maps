@@ -13,7 +13,7 @@ https://user-images.githubusercontent.com/18180004/181456530-6222fb7d-c15a-4718-
 
 This code is used by:
 * HK Yang, TC Hsiao, et al. (2022). Investigation of Factorized Optical Flows as Mid-Level Representations. IROS 2022. [Paper](https://arxiv.org/abs/2203.04927)
-
+* "Kemono", a rule-based object-goal navgiation agent for Habitat Challenge 2022. [Ending2015a/kemono-habitat-2022](https://github.com/Ending2015a/kemono-habitat-2022/tree/master)
 
 Version: `0.0.3a1`
 
